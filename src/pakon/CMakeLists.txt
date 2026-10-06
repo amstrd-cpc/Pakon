@@ -9,6 +9,8 @@ set(PAKON_CORE_SOURCES
     errors/error.cpp
     logging/logger.cpp
     usb/transport.cpp
+    ppb/packet.cpp
+    ppb/client.cpp
 )
 
 if(WIN32)
