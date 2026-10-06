@@ -1,0 +1,69 @@
+;
+; Pakon F135+ project - WinUSB driver package (INF only).
+;
+; Installs Microsoft's in-box Winusb.sys (via the system winusb.inf) as
+; the function driver. This package contains NO driver binaries, NO
+; firmware, and no code derived from any third-party driver.
+;
+; Targeted hardware IDs (device level, case-insensitive matching by
+; Windows):
+;   USB\VID_0F05&PID_F235             cold/bootstrap identity - present
+;                                      out of the box with Code 28 (no
+;                                      compatible driver installed)
+;   USB\VID_0F05&PID_F135&REV_0002    warm F-135/F-135+ identity after
+;                                      firmware-load re-enumeration
+;                                      (pakon-reference identity table)
+;
+; The DeviceInterfaceGUID below MUST stay byte-identical to
+; kDeviceInterfaceGuid in src/pakon/usb/identity.hpp; the test suite
+; (tests/usb/identity_test.cpp) reads this file and fails on drift.
+;
+; Structure follows Microsoft Learn, "WinUSB (Winusb.sys) Installation
+; for Developers", section "Writing a custom INF for WinUSB installation" - the
+; Include/Needs sections install the system driver and must not change.
+;
+; Catalog signing (PakonWinUSB.cat is generated, not committed): see
+; driver/README.md and docs/WINUSB_TEST.md. Signing requires the WDK's
+; inf2cat tool only - the project build itself does not use the WDK.
+;
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = USBDevice
+ClassGUID   = {88BAE032-5A81-49f0-BC3D-A4FF138216D6}
+Provider    = %ManufacturerName%
+CatalogFile = PakonWinUSB.cat
+DriverVer   = 10/06/2026,1.0.0.0
+PnpLockdown = 1
+
+; ==================== Manufacturer and models ====================
+
+[Manufacturer]
+%ManufacturerName% = Standard,NTamd64
+
+[Standard.NTamd64]
+%DeviceNameCold% = USB_Install, USB\VID_0F05&PID_F235
+%DeviceNameWarm% = USB_Install, USB\VID_0F05&PID_F135&REV_0002
+
+; ==================== Installation ====================
+
+[USB_Install]
+Include = winusb.inf
+Needs   = WINUSB.NT
+
+[USB_Install.Services]
+Include = winusb.inf
+Needs   = WINUSB.NT.Services
+
+[USB_Install.HW]
+AddReg  = Dev_AddReg
+
+[Dev_AddReg]
+HKR,,DeviceInterfaceGUIDs,0x10000,"{0e9e6f29-e70a-4582-8d02-bde3ad701252}"
+
+; ==================== Strings ====================
+
+[Strings]
+ManufacturerName = "Pakon F135+ project"
+DeviceNameCold    = "Pakon F135+ scanner (cold/bootstrap) - WinUSB"
+DeviceNameWarm    = "Pakon F135+ scanner (warm) - WinUSB"
