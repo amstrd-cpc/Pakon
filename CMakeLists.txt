@@ -23,3 +23,8 @@ add_subdirectory(src/pakon)
 if(PAKON_BUILD_APPS)
     add_subdirectory(apps/pakon-cli)
 endif()
+
+if(PAKON_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
