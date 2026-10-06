@@ -11,6 +11,7 @@ set(PAKON_CORE_SOURCES
     usb/transport.cpp
     ppb/packet.cpp
     ppb/client.cpp
+    scanner/scanner.cpp
 )
 
 if(WIN32)
