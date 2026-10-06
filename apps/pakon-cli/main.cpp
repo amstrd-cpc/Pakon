@@ -63,7 +63,18 @@ int cmd_list() {
                                      : "  (operational)");
         std::printf("Serial: %s\n",
                     device.serial_number ? device.serial_number->c_str() : "n/a");
-        std::printf("Device path: %s\n", device.device_path.c_str());
+        if (!device.hardware_id.empty()) {
+            std::printf("Hardware ID: %s\n", device.hardware_id.c_str());
+        }
+        if (!device.instance_id.empty()) {
+            std::printf("Device instance: %s\n", device.instance_id.c_str());
+        }
+        if (device.has_device_interface()) {
+            std::printf("Device path: %s\n", device.device_path.c_str());
+        } else {
+            std::puts("Device path: (none — no function-driver interface; "
+                      "discovered via PnP, not openable)");
+        }
 
         if (device.interfaces.empty()) {
             std::printf("Interfaces: unavailable%s%s\n",

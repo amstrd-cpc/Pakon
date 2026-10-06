@@ -207,25 +207,51 @@ private:
 Result<std::unique_ptr<IUsbTransport>> open_first(bool cold_ok) {
     auto devices = enumerate_pakon();
 
-    // Prefer an operational (warm) device; firmware loading for a cold
-    // device is out of scope (docs/usb-identity-and-firmware.md sequence,
-    // firmware bytes not shipped by this project).
+    // Prefer an operational (warm) device with a registered interface —
+    // only an interface yields a device_path CreateFile can open. Firmware
+    // loading for a cold device is out of scope (docs/usb-identity-and-firmware.md
+    // sequence, firmware bytes not shipped by this project), so cold
+    // devices are accepted only when the caller explicitly passes
+    // cold_ok; a device without an interface is never openable.
     const DeviceInfo* chosen = nullptr;
+    const DeviceInfo* cold_fallback = nullptr;
     for (const auto& device : devices) {
+        if (!device.has_device_interface()) {
+            continue;
+        }
         if (!device.is_cold()) {
             chosen = &device;
             break;
         }
+        if (cold_ok && cold_fallback == nullptr) {
+            cold_fallback = &device;
+        }
     }
-    if (chosen == nullptr && cold_ok && !devices.empty()) {
-        chosen = &devices.front();
+    if (chosen == nullptr) {
+        chosen = cold_fallback;
     }
 
     if (chosen == nullptr) {
-        return failure<std::unique_ptr<IUsbTransport>>(ErrorKind::usb_device_not_found,
-                                                       "no Pakon F-X35 device detected");
-    }
-    if (chosen->is_cold() && !cold_ok) {
+        if (devices.empty()) {
+            return failure<std::unique_ptr<IUsbTransport>>(ErrorKind::usb_device_not_found,
+                                                           "no Pakon F-X35 device detected");
+        }
+        const bool any_interface = [&] {
+            for (const auto& device : devices) {
+                if (device.has_device_interface()) return true;
+            }
+            return false;
+        }();
+        if (!any_interface) {
+            // Devices were found (list shows them) but nothing can be
+            // opened — say exactly why instead of pretending they're absent.
+            return failure<std::unique_ptr<IUsbTransport>>(
+                ErrorKind::usb_access_denied,
+                "Pakon device discovered but not openable: no function-driver "
+                "device interface is registered (Code 28, or a driver that does "
+                "not expose WinUSB) — see docs/USB.md § Enumeration and "
+                "docs/WINUSB_TEST.md to bind WinUSB");
+        }
         return failure<std::unique_ptr<IUsbTransport>>(
             ErrorKind::usb_device_not_found,
             "Pakon device in cold/bootstrap state (0f05:f235): firmware is not "

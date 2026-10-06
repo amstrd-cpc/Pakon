@@ -70,16 +70,38 @@ struct DeviceInfo {
     std::vector<InterfaceInfo> interfaces;
 
     // OS device path (Windows: the SetupAPI interface path), needed to
-    // open the device. Not a USB descriptor field.
+    // open the device. Empty when no function driver has registered an
+    // interface — e.g. a Code 28 cold unit, which PnP discovery still
+    // finds (see usb/identity.hpp). Not a USB descriptor field.
     std::string device_path;
 
+    // Windows PnP device instance ID, e.g.
+    // "USB\VID_0F05&PID_F235\6&1D7D6E45&0&4". Stable across driver
+    // changes; the handle used to install/bind a driver later. Note the
+    // segment after the backslash is a PnP location id, not a serial
+    // number (usb/identity.hpp::serial_from_instance).
+    std::string instance_id;
+
+    // Windows PnP hardware ID, e.g. "USB\VID_0F05&PID_F235&REV_::07" —
+    // the string driver/PakonWinUSB.inf matches against. Empty when the
+    // device was discovered through its interface path only.
+    std::string hardware_id;
+
     // Why interface/endpoint detail could not be read (e.g. the device is
-    // owned by another driver that is not WinUSB-bound). Empty when the
-    // detail was read successfully.
+    // owned by another driver that is not WinUSB-bound, or no function
+    // driver is installed at all). Empty when the detail was read
+    // successfully.
     std::string interface_note;
 
     // True if this is a known Pakon F-X35 identity (cold or warm).
     bool is_pakon() const noexcept { return vendor_id == kVendorId; }
+
+    // True when the OS has a registered device interface for this device
+    // (a function driver bound and exposed GUID_DEVINTERFACE_USB_DEVICE).
+    // Necessary — but not sufficient — for openability: the binding may
+    // still not be WinUSB (interface_note says so when opening fails).
+    // False for a Code 28 device: discovered via PnP, nothing to open.
+    bool has_device_interface() const noexcept { return !device_path.empty(); }
 
     // "cold" = bootstrap identity, firmware not yet loaded.
     bool is_cold() const noexcept {
@@ -101,7 +123,10 @@ struct DeviceInfo {
     }
 };
 
-// Enumerate all USB devices the backend can see (no device opened).
+// Enumerate all USB devices the backend can see (no device opened). On
+// Windows this merges PnP device-tree discovery (finds devices with no
+// function driver, e.g. Code 28 cold units) with device-interface
+// discovery (supplies device_path where a function driver registered one).
 std::vector<DeviceInfo> enumerate();
 
 // Enumerate only Pakon devices (vendor 0f05).

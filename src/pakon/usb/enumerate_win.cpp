@@ -1,7 +1,20 @@
 // USB enumeration on Windows via SetupAPI.
 //
-// Deliberately does NOT open the device for I/O and does NOT depend on
-// WinUSB being bound: VID/PID/serial are parsed from the device instance
+// Two discovery passes are merged by device instance ID:
+//
+//   1. PnP device tree (DIGCF_PRESENT | DIGCF_ALLCLASSES): every present
+//      devnode, driver or no driver. This is what makes a Code 28 cold
+//      unit discoverable: without a function driver Windows registers no
+//      GUID_DEVINTERFACE_USB_DEVICE interface instance, so interface-only
+//      enumeration never sees the device — but its devnode exists as soon
+//      as the device is on the bus. Hardware-ID matching lives in
+//      usb/identity.hpp (unit-tested on any host).
+//   2. Device interfaces (GUID_DEVINTERFACE_USB_DEVICE): supplies the
+//      device_path used to open a device, keeps non-Pakon devices
+//      visible, and merges into pass 1's entry when both see the unit.
+//
+// Neither pass opens the device for I/O and neither depends on WinUSB
+// being bound: VID/PID/serial/instance are parsed from the device
 // identity, so a unit owned by the legacy Pakon driver is still listed.
 // Interface/endpoint detail is added opportunistically by opening the
 // device with WinUSB when that driver binding allows it.
@@ -12,6 +25,7 @@
 
 #ifdef _WIN32
 
+#include "pakon/usb/identity.hpp"
 #include "pakon/usb/transport.hpp"
 
 #include <windows.h>
@@ -19,61 +33,186 @@
 #include <usbiodef.h>
 #include <winusb.h>
 
+#include <map>
 #include <optional>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace pakon::usb {
 namespace {
 
-// Parse "VID_XXXX&PID_XXXX" (case-insensitive) out of a device path or
-// hardware id.
-std::optional<std::pair<std::uint16_t, std::uint16_t>>
-parse_vid_pid(const std::string& text) {
-    auto find_hex_field = [&](const char* key) -> std::optional<std::uint16_t> {
-        const std::string lower = [&] {
-            std::string s = text;
-            for (auto& c : s) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
-            return s;
-        }();
-        const auto pos = lower.find(key);
-        if (pos == std::string::npos) {
-            return std::nullopt;
-        }
-        const auto start = pos + std::char_traits<char>::length(key);
-        std::uint16_t value = 0;
-        int digits = 0;
-        for (std::size_t i = start; i < lower.size() && digits < 4; ++i, ++digits) {
-            const char c = lower[i];
-            value = static_cast<std::uint16_t>(value << 4);
-            if (c >= '0' && c <= '9') value |= static_cast<std::uint16_t>(c - '0');
-            else if (c >= 'a' && c <= 'f') value |= static_cast<std::uint16_t>(c - 'a' + 10);
-            else return std::nullopt;
-        }
-        if (digits != 4) return std::nullopt;
-        return value;
-    };
+// Discovery bookkeeping shared between the two passes.
+struct Discovery {
+    std::vector<DeviceInfo> devices;
 
-    const auto vid = find_hex_field("vid_");
-    const auto pid = find_hex_field("pid_");
-    if (!vid || !pid) {
-        return std::nullopt;
-    }
-    return std::pair<std::uint16_t, std::uint16_t>{*vid, *pid};
+    // Lowercased instance ID → index into `devices` (pass 1 only).
+    std::map<std::string, std::size_t> by_instance;
+
+    // vid:pid identities pass 1 listed at device level — used to drop
+    // duplicate &MI_ function entries for scanners already counted once.
+    std::set<std::pair<std::uint16_t, std::uint16_t>> pnp_identities;
+
+    // Lowercased instance ID → driver service name ("" = none installed).
+    std::map<std::string, std::string> service_by_instance;
+};
+
+std::string instance_key(std::string_view instance) {
+    return detail::ascii_lower(instance);
 }
 
-// For a USB device the device-instance specific part is the serial number
-// when the descriptor carries one:  "USB\VID_0F05&PID_F135\<serial>".
-std::optional<std::string> serial_from_instance(const std::string& instance) {
-    const auto backslash = instance.rfind('\\');
-    if (backslash == std::string::npos || backslash + 1 >= instance.size()) {
-        return std::nullopt;
+// First hardware ID of the devnode (SPDRP_HARDWAREID, REG_MULTI_SZ), e.g.
+// "USB\VID_0F05&PID_F235&REV_::07". Falls back to the instance's
+// hardware-ID segment (hardware_id_of) when the property is unavailable.
+std::string devnode_hardware_id(HDEVINFO set, SP_DEVINFO_DATA& devinfo,
+                                std::string_view instance) {
+    DWORD required = 0;
+    SetupDiGetDeviceRegistryPropertyA(set, &devinfo, SPDRP_HARDWAREID, nullptr, nullptr, 0,
+                                      &required);
+    if (required > 0) {
+        std::vector<std::uint8_t> buffer(required);
+        if (SetupDiGetDeviceRegistryPropertyA(set, &devinfo, SPDRP_HARDWAREID, nullptr,
+                                              buffer.data(), required, nullptr)) {
+            const auto* first = reinterpret_cast<const char*>(buffer.data());
+            if (first[0] != '\0') {
+                return first;
+            }
+        }
     }
-    auto serial = instance.substr(backslash + 1);
-    // Instance paths embed parent relationships with "&" — a real serial
-    // from the descriptor has no '&'. Keep only plausible values.
-    if (serial.find('&') != std::string::npos) {
-        return std::nullopt;
+    return std::string(hardware_id_of(instance));
+}
+
+// Function-driver service bound to the devnode (SPDRP_SERVICE). Empty
+// when nothing is installed (Code 28).
+std::string devnode_service(HDEVINFO set, SP_DEVINFO_DATA& devinfo) {
+    char service[256] = {};
+    if (!SetupDiGetDeviceRegistryPropertyA(set, &devinfo, SPDRP_SERVICE, nullptr,
+                                           reinterpret_cast<BYTE*>(service),
+                                           sizeof(service), nullptr)) {
+        return {};
     }
-    return serial;
+    return service;
+}
+
+// Pass 1 — PnP device tree: works without any driver bound.
+void enumerate_pnp(Discovery& discovery) {
+    HDEVINFO set = SetupDiGetClassDevsA(nullptr, nullptr, nullptr,
+                                        DIGCF_PRESENT | DIGCF_ALLCLASSES);
+    if (set == INVALID_HANDLE_VALUE) {
+        return;
+    }
+
+    SP_DEVINFO_DATA devinfo{};
+    devinfo.cbSize = sizeof(devinfo);
+    for (DWORD index = 0; SetupDiEnumDeviceInfo(set, index, &devinfo); ++index) {
+        char instance[512] = {};
+        if (!SetupDiGetDeviceInstanceIdA(set, &devinfo, instance, sizeof(instance),
+                                         nullptr)) {
+            continue;
+        }
+
+        const std::string hardware = devnode_hardware_id(set, devinfo, instance);
+        auto info = device_info_from_pnp(hardware, instance); // rejects non-Pakon + &MI_
+        if (!info) {
+            continue;
+        }
+
+        const std::string key = instance_key(instance);
+        discovery.service_by_instance.emplace(key, devnode_service(set, devinfo));
+        discovery.pnp_identities.emplace(info->vendor_id, info->product_id);
+        discovery.by_instance.emplace(key, discovery.devices.size());
+        discovery.devices.push_back(std::move(*info));
+    }
+
+    SetupDiDestroyDeviceInfoList(set);
+}
+
+// Pass 2 — registered device interfaces: device_path for devices a
+// function driver exposes, plus the historical enumeration of all other
+// USB devices. Pakon devices already listed by pass 1 are merged, not
+// duplicated.
+void enumerate_interfaces(Discovery& discovery) {
+    HDEVINFO set = SetupDiGetClassDevsA(&GUID_DEVINTERFACE_USB_DEVICE, nullptr, nullptr,
+                                        DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+    if (set == INVALID_HANDLE_VALUE) {
+        return;
+    }
+
+    SP_DEVICE_INTERFACE_DATA interface_data{};
+    interface_data.cbSize = sizeof(interface_data);
+
+    for (DWORD index = 0;
+         SetupDiEnumDeviceInterfaces(set, nullptr, &GUID_DEVINTERFACE_USB_DEVICE, index,
+                                     &interface_data);
+         ++index) {
+
+        DWORD required = 0;
+        SetupDiGetDeviceInterfaceDetailA(set, &interface_data, nullptr, 0, &required, nullptr);
+        if (required == 0) {
+            continue;
+        }
+        std::vector<std::uint8_t> buffer(required);
+        auto* detail = reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_A*>(buffer.data());
+        detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_A);
+
+        SP_DEVINFO_DATA devinfo{};
+        devinfo.cbSize = sizeof(devinfo);
+        if (!SetupDiGetDeviceInterfaceDetailA(set, &interface_data, detail, required,
+                                              nullptr, &devinfo)) {
+            continue;
+        }
+
+        DeviceInfo info;
+        info.device_path = detail->DevicePath;
+
+        const auto vid_pid = parse_vid_pid(info.device_path);
+        if (!vid_pid) {
+            continue; // not a USB device path with a parseable identity
+        }
+        info.vendor_id = vid_pid->first;
+        info.product_id = vid_pid->second;
+
+        char instance[512] = {};
+        if (SetupDiGetDeviceInstanceIdA(set, &devinfo, instance, sizeof(instance),
+                                        nullptr)) {
+            info.instance_id = instance;
+            info.serial_number = serial_from_instance(info.instance_id);
+        }
+
+        // Pass 1 owns the device-level entry: attach the path to it.
+        if (const auto it = discovery.by_instance.find(instance_key(info.instance_id));
+            it != discovery.by_instance.end()) {
+            discovery.devices[it->second].device_path = info.device_path;
+            continue;
+        }
+
+        // A composite function (&MI_…) of a scanner pass 1 already listed
+        // at device level would report the same physical unit twice.
+        if (is_usb_interface_id(info.instance_id) &&
+            discovery.pnp_identities.contains({info.vendor_id, info.product_id})) {
+            continue;
+        }
+
+        discovery.devices.push_back(std::move(info));
+    }
+
+    SetupDiDestroyDeviceInfoList(set);
+}
+
+// Honest "discovered, but nothing to open" note for a Pakon devnode with
+// no registered interface (Code 28, or a driver that exposes none).
+std::string pnp_only_note(const Discovery& discovery, const DeviceInfo& device) {
+    const auto it = discovery.service_by_instance.find(instance_key(device.instance_id));
+    const std::string service = (it == discovery.service_by_instance.end()) ? "" : it->second;
+    if (service.empty()) {
+        return "discovered via PnP but no function-driver interface is registered "
+               "(Code 28: no compatible driver installed) — not openable; install "
+               "driver/PakonWinUSB.inf to bind WinUSB (docs/WINUSB_TEST.md)";
+    }
+    return "discovered via PnP; function driver '" + service +
+           "' is bound but registers no GUID_DEVINTERFACE_USB_DEVICE interface "
+           "— not openable via WinUSB";
 }
 
 // Try to add interface/endpoint detail via WinUSB. Fails harmlessly when
@@ -158,66 +297,24 @@ void enrich_interfaces(DeviceInfo& info) {
 } // namespace
 
 std::vector<DeviceInfo> enumerate() {
-    std::vector<DeviceInfo> devices;
+    Discovery discovery;
+    enumerate_pnp(discovery);
+    enumerate_interfaces(discovery);
 
-    HDEVINFO set = SetupDiGetClassDevsA(&GUID_DEVINTERFACE_USB_DEVICE, nullptr, nullptr,
-                                        DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
-    if (set == INVALID_HANDLE_VALUE) {
-        return devices;
-    }
-
-    SP_DEVICE_INTERFACE_DATA interface_data{};
-    interface_data.cbSize = sizeof(interface_data);
-
-    for (DWORD index = 0;
-         SetupDiEnumDeviceInterfaces(set, nullptr, &GUID_DEVINTERFACE_USB_DEVICE, index,
-                                     &interface_data);
-         ++index) {
-
-        DWORD required = 0;
-        SetupDiGetDeviceInterfaceDetailA(set, &interface_data, nullptr, 0, &required, nullptr);
-        if (required == 0) {
+    // Endpoint detail for Pakon devices only — do not poke unrelated
+    // hardware. Devnodes without an interface are reported as discovered
+    // but not openable instead of being opened (there is no path to open).
+    for (auto& device : discovery.devices) {
+        if (!device.is_pakon()) {
             continue;
         }
-        std::vector<std::uint8_t> buffer(required);
-        auto* detail = reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_A*>(buffer.data());
-        detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_A);
-
-        SP_DEVINFO_DATA devinfo{};
-        devinfo.cbSize = sizeof(devinfo);
-        if (!SetupDiGetDeviceInterfaceDetailA(set, &interface_data, detail, required,
-                                              nullptr, &devinfo)) {
+        if (!device.has_device_interface()) {
+            device.interface_note = pnp_only_note(discovery, device);
             continue;
         }
-
-        DeviceInfo info;
-        info.device_path = detail->DevicePath;
-
-        const auto vid_pid = parse_vid_pid(info.device_path);
-        if (!vid_pid) {
-            continue; // not a USB device path with a parseable identity
-        }
-        info.vendor_id = vid_pid->first;
-        info.product_id = vid_pid->second;
-
-        char instance[512] = {};
-        if (SetupDiGetDeviceInstanceIdA(set, &devinfo, instance, sizeof(instance) - 1,
-                                        nullptr)) {
-            info.serial_number = serial_from_instance(instance);
-        }
-
-        devices.push_back(std::move(info));
+        enrich_interfaces(device);
     }
-
-    SetupDiDestroyDeviceInfoList(set);
-
-    // Endpoint detail for Pakon devices only — do not poke unrelated hardware.
-    for (auto& device : devices) {
-        if (device.is_pakon()) {
-            enrich_interfaces(device);
-        }
-    }
-    return devices;
+    return std::move(discovery.devices);
 }
 
 } // namespace pakon::usb
