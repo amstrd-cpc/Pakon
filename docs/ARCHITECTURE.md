@@ -40,18 +40,25 @@ src/pakon/
   protocol/addresses.hpp       bus addresses + safety notes
   protocol/commands.hpp        command bytes per controller (address-disambiguated)
   usb/transport.hpp            DeviceInfo, IUsbTransport, enumeration API
-  usb/enumerate_win.cpp        SetupAPI enumeration (driver-independent)
+  usb/identity.hpp             hardware-ID recognition, PnP instance parsing,
+                               shared DeviceInterfaceGUID (unit-tested on any host)
+  usb/enumerate_win.cpp        SetupAPI: PnP device tree + device interfaces
+                               (driver-independent — finds Code 28 devices)
   usb/win_usb_transport.cpp    WinUSB backend (Windows)
   usb/transport_stub.cpp       non-Windows stub (protocol tests still build)
   ppb/packet.hpp               Frame serialize/parse, reply parsing, builders
   ppb/client.hpp               exchange() + destination allow-list
   scanner/scanner.hpp          connect / identify / status, State/Model enums
 apps/pakon-cli/                CLI
+driver/                        WinUSB INF package (installs in-box winusb.sys;
+                               no binaries, no firmware — see driver/README.md)
 tests/                         self-contained harness (no test framework dep)
   support/replay_transport.hpp mock transport fed with captured request/reply
   ppb/packet_test.cpp          frame vectors from pakon-reference + captures
   scanner/scanner_replay_test.cpp  connect/identify/status replay
+  usb/identity_test.cpp        hardware-ID recognition + INF/GUID consistency
 docs/                          this documentation set
+  WINUSB_TEST.md               pending physical WinUSB binding test (procedure)
 ```
 
 ## Design rules

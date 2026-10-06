@@ -24,6 +24,9 @@ compile_commands.json
 *.dll
 *.pdb
 
+# Generated driver catalog (signed at install time — see driver/README.md)
+driver/*.cat
+
 # OS noise
 .DS_Store
 Thumbs.db

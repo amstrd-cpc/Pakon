@@ -37,19 +37,88 @@ corpus logs image traffic as `ep6` events.
 
 ## Enumeration (Phase 2)
 
-`usb::enumerate()` on Windows uses SetupAPI over
-`GUID_DEVINTERFACE_USB_DEVICE` and parses VID/PID/serial from the device
-instance identity (`USB\VID_xxxx&PID_xxxx\<serial>`):
+`usb::enumerate()` on Windows merges two SetupAPI passes, both read-only
+(never opens a device for I/O in either pass):
 
-- **No driver dependency** — a unit claimed by the installed legacy Pakon
-  driver is still listed (the driver binding only affects opening for I/O).
+1. **PnP device-tree pass** — `SetupDiGetClassDevsA(…,
+   DIGCF_PRESENT | DIGCF_ALLCLASSES)` + `SetupDiEnumDeviceInfo` +
+   `SetupDiGetDeviceInstanceIdA`, over every present devnode. A devnode
+   is kept when its hardware ID begins with `USB\VID_0F05&PID_F235` or
+   `USB\VID_0F05&PID_F135` (composite function IDs containing `&MI_` are
+   excluded — one scanner is listed once, at device level). VID/PID,
+   hardware ID, instance ID and serial are parsed by
+   `usb/identity.hpp`, which is platform-independent and unit-tested
+   (`tests/usb/identity_test.cpp`).
+2. **Device-interface pass** — `GUID_DEVINTERFACE_USB_DEVICE` (the
+   original path): supplies `device_path` for devices a function driver
+   exposed, merges into the PnP entry by instance ID, and keeps
+   non-Pakon devices visible as before. Pakon `&MI_` duplicates of an
+   already-listed devnode are dropped.
+
+### Why a cold (Code 28) device was invisible before
+
+Windows registers a `GUID_DEVINTERFACE_USB_DEVICE` interface instance
+when a function driver binds. A device with **Code 28 (no compatible
+driver installed)** has no function driver — hence no interface
+instance — so interface-only enumeration returned nothing even though
+Device Manager shows the unit (observed on the actual scanner:
+`reg query … /f "vid_0f05"` over the interface key → 0 matches, while
+`Get-PnpDevice` lists `USB\VID_0F05&PID_F235\6&1D7D6E45&0&4`). The PnP
+pass finds the devnode regardless of driver state, so the cold unit is
+now **discovered**: it appears in `pakon-cli list` with its hardware ID
+and instance ID, `Device path: (none …)` and an `interface_note` that
+says it is *discovered but not openable* — it is never presented as
+openable until a driver is bound.
+
+Two identity traps are handled explicitly:
+
+- The instance segment after the backslash (`6&1D7D6E45&0&4`) is a PnP
+  **location id**, not a USB serial number; `serial_from_instance`
+  rejects any value containing `&`, so no fake serial is ever reported.
+- `USB\VID_0F05&PID_F235&REV_::07` — Windows renders the non-BCD
+  `bcdDevice` nibbles of the `F235_AA07` personality as `:`; the match
+  is prefix-based so any cold revision is recognized.
+
+Properties of enumeration:
+
+- **Driver-independent** — works with no driver (Code 28), with the
+  installed legacy Pakon driver, and with WinUSB; binding only affects
+  *opening* for I/O.
 - **Read-only** — enumeration never sends USB traffic to any device
   (per-unit-data-and-safety.md: reading/polling has no recorded incident).
-- Interface/endpoint detail is added opportunistically: the device is opened
-  with WinUSB when that binding allows it; otherwise `interface_note`
-  explains why endpoints are unavailable instead of failing.
+- Interface/endpoint detail is added opportunistically for entries that
+  have a `device_path`: the device is opened with WinUSB when that
+  binding allows it; otherwise `interface_note` explains why endpoints
+  are unavailable instead of failing.
 
-`pakon-cli list` output is enumeration-only; it does not open a PPB session.
+`pakon-cli list` output is enumeration-only; it does not open a PPB
+session. `identify`/`status` go through `open_first`, which refuses
+devices without an interface (honest "discovered but not openable" error)
+and refuses cold devices (firmware loading not implemented).
+
+## Driver package — WinUSB INF (`driver/`)
+
+WinUSB (`winusb.sys`) is the **current preferred transport
+architecture**; a custom KMDF driver is only a documented fallback if
+the pending physical cold-device test shows WinUSB inadequate
+(WINUSB_TEST.md § Known risk). The package:
+
+- `driver/PakonWinUSB.inf` — targets `USB\VID_0F05&PID_F235` (cold) and
+  `USB\VID_0F05&PID_F135&REV_0002` (warm) and installs **Microsoft's
+  in-box WinUSB** through the system `winusb.inf` (`Include`/`Needs`
+  mechanism, per Microsoft's *WinUSB Installation for Developers*).
+- Registers the project device interface GUID
+  `{0e9e6f29-e70a-4582-8d02-bde3ad701252}`, shared byte-for-byte with
+  `kDeviceInterfaceGuid` in `usb/identity.hpp` and pinned by the test
+  suite.
+- Contains **no driver binaries, no firmware, no third-party driver
+  files** — and **no custom kernel driver exists at this stage**; only
+  Microsoft's in-box driver is bound.
+
+**Firmware loading is intentionally not implemented yet.** The package
+and the stack only reach: discovery → driver binding → descriptors.
+Physical validation of the binding is the next milestone and is
+[pending](WINUSB_TEST.md).
 
 ## Transport (`IUsbTransport`)
 
@@ -74,9 +143,11 @@ Backends:
 | libusb | Linux/macOS | future, drops in behind `IUsbTransport` |
 
 Verified: both Windows sources compile clean (`-Wall -Wextra`) for
-`x86_64-windows-gnu` and a full `pakon-cli.exe` links; CLI smoke-tested and
-both test suites pass as Windows binaries. Real MSVC build still to be run
-(STATUS.md: WINDOWS MSVC BUILD REQUIRED).
+`x86_64-windows-gnu` and a full `pakon-cli.exe` links; CLI smoke-tested;
+native MSVC Release builds with zero `/W4 /permissive-` warnings and all
+three CTest suites pass on both platforms (Linux/GCC and Windows/MSVC).
+The only remaining verification is against attached hardware
+(STATUS.md: PHYSICAL TEST REQUIRED).
 
 ## Known limitation — device access when the legacy driver owns the unit
 
