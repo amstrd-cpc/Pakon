@@ -32,3 +32,30 @@ add_library(pakon_core STATIC ${PAKON_CORE_SOURCES})
 target_include_directories(pakon_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/..
 )
+
+if(WIN32)
+    # Windows system import libraries used by usb/enumerate_win.cpp
+    # (SetupAPI enumeration) and usb/win_usb_transport.cpp (WinUSB pipe
+    # I/O). PRIVATE keeps them off the compile interface; for a static
+    # library CMake still propagates them to consumers as
+    # $<LINK_ONLY:...>, so executables linking pakon_core resolve them
+    # at link time. No SDK paths are hardcoded - the MSVC toolchain
+    # resolves these by name.
+    target_link_libraries(pakon_core PRIVATE
+        setupapi
+        winusb
+    )
+
+    # GUID_DEVINTERFACE_USB_DEVICE is declared by usbiodef.h but defined
+    # by no SDK library (verified by scanning all um/x64 import libs);
+    # the header documentation requires "include initguid.h first, then
+    # include usbiodef.h" so this translation unit emits the definition.
+    # The forced include must precede everything else because guiddef.h
+    # latches the INITGUID-dependent DEFINE_GUID form at first inclusion
+    # (its defining form is DECLSPEC_SELECTANY, so no duplicate-symbol
+    # risk). Source files left unmodified; GNU toolchains resolve the
+    # GUID from their import libraries and need no forced include.
+    set_source_files_properties(usb/enumerate_win.cpp PROPERTIES
+        COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC,Clang>:/FIinitguid.h>"
+    )
+endif()
