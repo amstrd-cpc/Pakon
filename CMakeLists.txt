@@ -19,3 +19,7 @@ else()
 endif()
 
 add_subdirectory(src/pakon)
+
+if(PAKON_BUILD_APPS)
+    add_subdirectory(apps/pakon-cli)
+endif()
