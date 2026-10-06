@@ -226,14 +226,17 @@ PAKON_TEST(serialize_refuses_oversize_frame) {
 
 PAKON_TEST(read_request_is_always_three_data_bytes) {
     // Every READ in the capture corpus is [01][03][addr][count][reg].
+    // Rows are std::array (not std::tuple): passing int literals through
+    // tuple's converting constructor triggers MSVC C4244, while aggregate
+    // initialization of constants that fit uint8_t does not.
     for (const auto [address, count, reg] : {
-             std::tuple<std::uint8_t, std::uint8_t, std::uint8_t>{0x40, 1, 0x02},
-             std::tuple<std::uint8_t, std::uint8_t, std::uint8_t>{0x40, 2, 0x84},
-             std::tuple<std::uint8_t, std::uint8_t, std::uint8_t>{0x40, 4, 0x88},
-             std::tuple<std::uint8_t, std::uint8_t, std::uint8_t>{0x40, 12, 0x07},
-             std::tuple<std::uint8_t, std::uint8_t, std::uint8_t>{0x40, 30, 0x90},
-             std::tuple<std::uint8_t, std::uint8_t, std::uint8_t>{0x44, 1, 0x02},
-             std::tuple<std::uint8_t, std::uint8_t, std::uint8_t>{0x10, 2, 0x03},
+             std::array<std::uint8_t, 3>{0x40, 1, 0x02},
+             std::array<std::uint8_t, 3>{0x40, 2, 0x84},
+             std::array<std::uint8_t, 3>{0x40, 4, 0x88},
+             std::array<std::uint8_t, 3>{0x40, 12, 0x07},
+             std::array<std::uint8_t, 3>{0x40, 30, 0x90},
+             std::array<std::uint8_t, 3>{0x44, 1, 0x02},
+             std::array<std::uint8_t, 3>{0x10, 2, 0x03},
          }) {
         const auto frame = pakon::ppb::make_read(address, count, reg);
         EXPECT_EQ(frame.data.size(), std::size_t{3});
