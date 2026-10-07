@@ -20,12 +20,15 @@ if(WIN32)
     list(APPEND PAKON_CORE_SOURCES
         usb/enumerate_win.cpp
         usb/win_usb_transport.cpp
+        usb/driver_attrib_win.cpp
     )
 else()
     # Non-Windows stub: enumeration returns empty, open_first reports
-    # usb_not_supported. Transport-independent layers still build and test.
+    # usb_not_supported, driver attribution reports unsupported.
+    # Transport-independent layers still build and test.
     list(APPEND PAKON_CORE_SOURCES
         usb/transport_stub.cpp
+        usb/driver_attrib_stub.cpp
     )
 endif()
 

@@ -2,6 +2,8 @@
 //
 // Commands (Phase 1-4 scope + bootstrap probe):
 //   list                 enumerate attached Pakon scanners (no I/O sent)
+//   attrib               read-only PnP/driver attribution report
+//                        (property queries only - no device I/O)
 //   probe                cold-device read-only bootstrap probe: one
 //                        documented vendor control read (stage-1
 //                        personality), no bulk traffic, no writes
@@ -19,6 +21,7 @@
 #include "pakon/bootstrap/probe.hpp"
 #include "pakon/logging/logger.hpp"
 #include "pakon/scanner/scanner.hpp"
+#include "pakon/usb/driver_attrib.hpp"
 #include "pakon/usb/transport.hpp"
 
 namespace {
@@ -39,6 +42,10 @@ void print_usage() {
         "\n"
         "commands:\n"
         "  list       list attached Pakon scanners (enumeration only)\n"
+        "  attrib     report PnP/driver attribution for attached scanners\n"
+        "             (read-only property queries: hardware/compatible IDs,\n"
+        "             service, class + class GUID, descriptions, bound INF;\n"
+        "             no device is opened, no USB traffic is sent)\n"
         "  probe      read-only bootstrap probe: stage-1 personality read\n"
         "             (works on cold devices; the only I/O it sends is one\n"
         "             documented vendor control read — see docs/BOOTSTRAP.md)\n"
@@ -113,6 +120,73 @@ int cmd_list() {
                     "The image stream uses a separate bulk IN endpoint (number "
                     "read from the descriptors above).\n");
     }
+    return 0;
+}
+
+// Read-only PnP/driver attribution (docs/BOOT_CHAIN.md § 6): property
+// queries over the present device list — no device is opened, no USB
+// traffic is sent, no driver state is modified.
+int cmd_attrib() {
+    if (!pakon::usb::driver_attribution_supported()) {
+        std::fprintf(stderr,
+                     "error: driver attribution requires Windows (PnP "
+                     "property queries); see docs/BOOT_CHAIN.md\n");
+        return 1;
+    }
+
+    const auto devices = pakon::usb::collect_driver_attributions();
+    if (devices.empty()) {
+        std::puts("No Pakon F-X35 devices detected.");
+        std::puts("(Read-only PnP query: no device opened, no USB traffic "
+                  "sent.)");
+        return 0;
+    }
+
+    const auto shown = [](const std::string& value) -> const char* {
+        return value.empty() ? "(not set)" : value.c_str();
+    };
+    for (const auto& device : devices) {
+        const char* kind =
+            device.kind == pakon::usb::PakonHardwareId::cold_f235
+                ? "cold F235 (bootstrap)"
+                : device.kind == pakon::usb::PakonHardwareId::warm_f135
+                      ? "warm F135 (operational)"
+                      : "unknown";
+        std::puts("Pakon device attribution (read-only PnP property queries)");
+        std::printf("  Instance:        %s\n", device.instance_id.c_str());
+        std::printf("  Identity:        VID %04x  PID %04x  (%s)\n",
+                    device.vendor_id, device.product_id, kind);
+        std::puts("  Present:         yes (enumerated under DIGCF_PRESENT)");
+        std::puts("  Hardware IDs:");
+        if (device.hardware_ids.empty()) {
+            std::puts("    (not set)");
+        } else {
+            for (const auto& id : device.hardware_ids) {
+                std::printf("    %s\n", id.c_str());
+            }
+        }
+        std::puts("  Compatible IDs:");
+        if (device.compatible_ids.empty()) {
+            std::puts("    (none)");
+        } else {
+            for (const auto& id : device.compatible_ids) {
+                std::printf("    %s\n", id.c_str());
+            }
+        }
+        std::printf("  Service:         %s\n",
+                    device.service.empty()
+                        ? "(none - no function driver, Code 28)"
+                        : device.service.c_str());
+        std::printf("  Class:           %s  %s\n", shown(device.class_name),
+                    shown(device.class_guid));
+        std::printf("  DeviceDesc:      %s\n", shown(device.device_desc));
+        std::printf("  FriendlyName:    %s\n", shown(device.friendly_name));
+        std::printf("  BusReported:     %s\n", shown(device.bus_reported_desc));
+        std::printf("  Driver INF:      %s\n", shown(device.driver_inf));
+        std::printf("  Driver provider: %s\n", shown(device.driver_provider));
+        std::puts("");
+    }
+    std::puts("(Read-only PnP query: no device opened, no USB traffic sent.)");
     return 0;
 }
 
@@ -278,6 +352,9 @@ int main(int argc, char** argv) {
 
     if (command == "list") {
         return cmd_list();
+    }
+    if (command == "attrib") {
+        return cmd_attrib();
     }
     if (command == "probe") {
         return cmd_probe();
