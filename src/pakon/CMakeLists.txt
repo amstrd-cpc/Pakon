@@ -44,6 +44,7 @@ if(WIN32)
     target_link_libraries(pakon_core PRIVATE
         setupapi
         winusb
+        ole32
     )
 
     # GUID_DEVINTERFACE_USB_DEVICE is declared by usbiodef.h but defined

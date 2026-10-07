@@ -32,6 +32,7 @@
 #include <setupapi.h>
 #include <usbiodef.h>
 #include <winusb.h>
+#include <objbase.h>
 
 #include <map>
 #include <optional>
@@ -133,74 +134,86 @@ void enumerate_pnp(Discovery& discovery) {
 // USB devices. Pakon devices already listed by pass 1 are merged, not
 // duplicated.
 void enumerate_interfaces(Discovery& discovery) {
-    HDEVINFO set = SetupDiGetClassDevsA(&GUID_DEVINTERFACE_USB_DEVICE, nullptr, nullptr,
-                                        DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
-    if (set == INVALID_HANDLE_VALUE) {
-        return;
+    const std::vector<GUID> interface_guids = {
+        GUID_DEVINTERFACE_USB_DEVICE,
+    };
+
+    std::vector<GUID> guids = interface_guids;
+
+    {
+        const std::string guid_string(kDeviceInterfaceGuid);
+        const std::wstring wide_guid(guid_string.begin(), guid_string.end());
+        GUID pakon_guid{};
+        if (CLSIDFromString(wide_guid.c_str(), &pakon_guid) == S_OK) {
+            guids.push_back(pakon_guid);
+        }
     }
 
-    SP_DEVICE_INTERFACE_DATA interface_data{};
-    interface_data.cbSize = sizeof(interface_data);
+    for (const GUID& interface_guid : guids) {
+        HDEVINFO set = SetupDiGetClassDevsA(
+            &interface_guid, nullptr, nullptr,
+            DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+        if (set == INVALID_HANDLE_VALUE) continue;
 
-    for (DWORD index = 0;
-         SetupDiEnumDeviceInterfaces(set, nullptr, &GUID_DEVINTERFACE_USB_DEVICE, index,
-                                     &interface_data);
-         ++index) {
+        SP_DEVICE_INTERFACE_DATA interface_data{};
+        interface_data.cbSize = sizeof(interface_data);
 
-        DWORD required = 0;
-        SetupDiGetDeviceInterfaceDetailA(set, &interface_data, nullptr, 0, &required, nullptr);
-        if (required == 0) {
-            continue;
+        for (DWORD index = 0;
+             SetupDiEnumDeviceInterfaces(
+                 set, nullptr, &interface_guid, index, &interface_data);
+             ++index) {
+
+            DWORD required = 0;
+            SetupDiGetDeviceInterfaceDetailA(
+                set, &interface_data, nullptr, 0, &required, nullptr);
+            if (required == 0) continue;
+
+            std::vector<std::uint8_t> buffer(required);
+            auto* detail =
+                reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_A*>(buffer.data());
+            detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_A);
+
+            SP_DEVINFO_DATA devinfo{};
+            devinfo.cbSize = sizeof(devinfo);
+            if (!SetupDiGetDeviceInterfaceDetailA(
+                    set, &interface_data, detail, required, nullptr, &devinfo)) {
+                continue;
+            }
+
+            DeviceInfo info;
+            info.device_path = detail->DevicePath;
+
+            const auto vid_pid = parse_vid_pid(info.device_path);
+            if (!vid_pid) continue;
+            info.vendor_id = vid_pid->first;
+            info.product_id = vid_pid->second;
+
+            char instance[512] = {};
+            if (SetupDiGetDeviceInstanceIdA(
+                    set, &devinfo, instance, sizeof(instance), nullptr)) {
+                info.instance_id = instance;
+                info.serial_number = serial_from_instance(info.instance_id);
+            }
+
+            if (const auto it =
+                    discovery.by_instance.find(instance_key(info.instance_id));
+                it != discovery.by_instance.end()) {
+                discovery.devices[it->second].device_path = info.device_path;
+                discovery.devices[it->second].interface_note.clear();
+                continue;
+            }
+
+            if (is_usb_interface_id(info.instance_id) &&
+                discovery.pnp_identities.contains({info.vendor_id, info.product_id})) {
+                continue;
+            }
+
+            discovery.devices.push_back(std::move(info));
         }
-        std::vector<std::uint8_t> buffer(required);
-        auto* detail = reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_A*>(buffer.data());
-        detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_A);
 
-        SP_DEVINFO_DATA devinfo{};
-        devinfo.cbSize = sizeof(devinfo);
-        if (!SetupDiGetDeviceInterfaceDetailA(set, &interface_data, detail, required,
-                                              nullptr, &devinfo)) {
-            continue;
-        }
-
-        DeviceInfo info;
-        info.device_path = detail->DevicePath;
-
-        const auto vid_pid = parse_vid_pid(info.device_path);
-        if (!vid_pid) {
-            continue; // not a USB device path with a parseable identity
-        }
-        info.vendor_id = vid_pid->first;
-        info.product_id = vid_pid->second;
-
-        char instance[512] = {};
-        if (SetupDiGetDeviceInstanceIdA(set, &devinfo, instance, sizeof(instance),
-                                        nullptr)) {
-            info.instance_id = instance;
-            info.serial_number = serial_from_instance(info.instance_id);
-        }
-
-        // Pass 1 owns the device-level entry: attach the path to it.
-        if (const auto it = discovery.by_instance.find(instance_key(info.instance_id));
-            it != discovery.by_instance.end()) {
-            discovery.devices[it->second].device_path = info.device_path;
-            continue;
-        }
-
-        // A composite function (&MI_…) of a scanner pass 1 already listed
-        // at device level would report the same physical unit twice.
-        if (is_usb_interface_id(info.instance_id) &&
-            discovery.pnp_identities.contains({info.vendor_id, info.product_id})) {
-            continue;
-        }
-
-        discovery.devices.push_back(std::move(info));
+        SetupDiDestroyDeviceInfoList(set);
     }
-
-    SetupDiDestroyDeviceInfoList(set);
-}
-
-// Honest "discovered, but nothing to open" note for a Pakon devnode with
+}// Honest "discovered, but nothing to open" note for a Pakon devnode with
 // no registered interface (Code 28, or a driver that exposes none).
 std::string pnp_only_note(const Discovery& discovery, const DeviceInfo& device) {
     const auto it = discovery.service_by_instance.find(instance_key(device.instance_id));
@@ -220,13 +233,13 @@ std::string pnp_only_note(const Discovery& discovery, const DeviceInfo& device) 
 void enrich_interfaces(DeviceInfo& info) {
     HANDLE device = CreateFileA(info.device_path.c_str(), GENERIC_READ | GENERIC_WRITE,
                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                                OPEN_EXISTING, FILE_FLAG_OVERLAPPED,
                                 nullptr);
     if (device == INVALID_HANDLE_VALUE) {
         // Retry read-only: some bindings allow query but not write access.
         device = CreateFileA(info.device_path.c_str(), GENERIC_READ,
                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                             OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
     }
     if (device == INVALID_HANDLE_VALUE) {
         info.interface_note =
@@ -237,13 +250,12 @@ void enrich_interfaces(DeviceInfo& info) {
 
     WINUSB_INTERFACE_HANDLE usb = nullptr;
     if (!WinUsb_Initialize(device, &usb)) {
+        const DWORD error = GetLastError();
         info.interface_note =
-            "interface detail unavailable (not WinUSB-bound; run pakon-cli list "
-            "on a system where the device is exposed via WinUSB to see endpoints)";
+            "WinUsb_Initialize failed, GetLastError=" + std::to_string(error);
         CloseHandle(device);
         return;
     }
-
     const auto read_interface = [&](WINUSB_INTERFACE_HANDLE handle) {
         USB_INTERFACE_DESCRIPTOR descriptor{};
         if (!WinUsb_QueryInterfaceSettings(handle, 0, &descriptor)) {
