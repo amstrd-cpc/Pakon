@@ -35,6 +35,7 @@ enum class ErrorKind {
     usb_timeout,
     usb_access_denied,
     usb_not_supported,
+    usb_short_transfer,       // control transfer returned fewer bytes than requested
 
     // PPB protocol layer
     ppb_invalid_frame,      // type byte 0 or truncated frame (see safety rules)

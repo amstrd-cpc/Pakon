@@ -11,6 +11,7 @@ std::string_view to_string(ErrorKind kind) {
     case ErrorKind::usb_timeout: return "usb_timeout";
     case ErrorKind::usb_access_denied: return "usb_access_denied";
     case ErrorKind::usb_not_supported: return "usb_not_supported";
+    case ErrorKind::usb_short_transfer: return "usb_short_transfer";
     case ErrorKind::ppb_invalid_frame: return "ppb_invalid_frame";
     case ErrorKind::ppb_bad_status: return "ppb_bad_status";
     case ErrorKind::ppb_unexpected_reply: return "ppb_unexpected_reply";

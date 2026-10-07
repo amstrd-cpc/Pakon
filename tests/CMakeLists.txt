@@ -19,3 +19,12 @@ target_include_directories(usb_identity_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 target_compile_definitions(usb_identity_test PRIVATE
     PAKON_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME usb_identity COMMAND usb_identity_test)
+
+# Bootstrap probe: pins the stage-1 personality read layout to the
+# documented request and proves with a fake transport that a probe
+# performs exactly one control read and no writes/bulk traffic (pure
+# logic, no hardware, no Windows APIs).
+add_executable(bootstrap_probe_test bootstrap/probe_test.cpp)
+target_link_libraries(bootstrap_probe_test PRIVATE pakon_core)
+target_include_directories(bootstrap_probe_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME bootstrap_probe COMMAND bootstrap_probe_test)

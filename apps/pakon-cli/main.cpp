@@ -1,7 +1,10 @@
 // pakon-cli — command-line diagnostics for the Pakon F-X35 scanner stack.
 //
-// Commands (Phase 1-4 scope):
+// Commands (Phase 1-4 scope + bootstrap probe):
 //   list                 enumerate attached Pakon scanners (no I/O sent)
+//   probe                cold-device read-only bootstrap probe: one
+//                        documented vendor control read (stage-1
+//                        personality), no bulk traffic, no writes
 //   identify             open PPB session, presence probes, module info
 //   status               identify + status polls and read-only registers
 //
@@ -13,6 +16,7 @@
 #include <string>
 #include <string_view>
 
+#include "pakon/bootstrap/probe.hpp"
 #include "pakon/logging/logger.hpp"
 #include "pakon/scanner/scanner.hpp"
 #include "pakon/usb/transport.hpp"
@@ -35,6 +39,9 @@ void print_usage() {
         "\n"
         "commands:\n"
         "  list       list attached Pakon scanners (enumeration only)\n"
+        "  probe      read-only bootstrap probe: stage-1 personality read\n"
+        "             (works on cold devices; the only I/O it sends is one\n"
+        "             documented vendor control read — see docs/BOOTSTRAP.md)\n"
         "  identify   open the PPB session and identify the scanner model\n"
         "  status     identify, then poll status registers (read-only)\n"
         "\n"
@@ -106,6 +113,59 @@ int cmd_list() {
                     "The image stream uses a separate bulk IN endpoint (number "
                     "read from the descriptors above).\n");
     }
+    return 0;
+}
+
+int cmd_probe() {
+    // Explicit cold_ok: the probe's whole purpose is the cold stage-1
+    // loader. It performs exactly one read-only vendor control request
+    // (bootstrap::probe — pinned in tests/bootstrap/probe_test.cpp); no
+    // bulk traffic, no control writes, no PPB frames. Evidence and safety
+    // analysis: docs/BOOTSTRAP.md.
+    auto transport = pakon::usb::open_first(/*cold_ok=*/true);
+    if (!transport) {
+        print_error(transport.error());
+        return 1;
+    }
+
+    const auto& info = (*transport)->device_info();
+    std::printf("State: %s\n", info.is_cold()
+                    ? "cold/bootstrap (0f05:f235) — firmware not loaded"
+                    : "warm/operational");
+    std::printf("VID: %04x  PID: %04x\n", info.vendor_id, info.product_id);
+    if (!info.hardware_id.empty()) {
+        std::printf("Hardware ID: %s\n", info.hardware_id.c_str());
+    }
+    if (!info.instance_id.empty()) {
+        std::printf("Device instance: %s\n", info.instance_id.c_str());
+    }
+
+    const auto report = pakon::bootstrap::probe(**transport);
+    if (!report) {
+        print_error(report.error());
+        std::puts("hint: the stage-1 personality read (vendor IN 0xA9, "
+                  "wIndex 0) is the only I/O this command performs — record "
+                  "this output as bootstrap evidence; interpretation guide: "
+                  "docs/BOOTSTRAP.md");
+        return 1;
+    }
+
+    const auto& personality = report->personality.bytes;
+    std::puts("Personality: 8-byte C0 record (stage-1 loader, vendor IN "
+              "0xA9, wValue 0, wIndex 0)");
+    std::printf("  raw:   %s\n",
+                pakon::bootstrap::hex_string(personality).c_str());
+    std::string ascii;
+    for (const auto byte : personality) {
+        ascii += (byte >= 0x20 && byte < 0x7f) ? static_cast<char>(byte) : '.';
+    }
+    std::printf("  ascii: %s\n", ascii.c_str());
+    std::puts("Note: the C0 record's byte layout is not documented in this "
+              "repository — raw bytes only, no decoding applied "
+              "(docs/BOOTSTRAP.md).");
+    std::puts("Probe sent exactly one vendor control read: no bulk traffic, "
+              "no writes. Firmware upload is not implemented (evidence gaps: "
+              "docs/BOOTSTRAP.md).");
     return 0;
 }
 
@@ -218,6 +278,9 @@ int main(int argc, char** argv) {
 
     if (command == "list") {
         return cmd_list();
+    }
+    if (command == "probe") {
+        return cmd_probe();
     }
     if (command == "identify" || command == "status") {
         return run_scanner_command(command);

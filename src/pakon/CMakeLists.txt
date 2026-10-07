@@ -2,6 +2,7 @@
 #
 # Layering (top depends on bottom):
 #   scanner → ppb → usb
+#   bootstrap → usb   (cold-device read-only probe; no PPB involvement)
 #   all layers use errors/ and logging/
 # protocol/ is header-only constants, documented against pakon-reference.
 
@@ -9,6 +10,7 @@ set(PAKON_CORE_SOURCES
     errors/error.cpp
     logging/logger.cpp
     usb/transport.cpp
+    bootstrap/probe.cpp
     ppb/packet.cpp
     ppb/client.cpp
     scanner/scanner.cpp
