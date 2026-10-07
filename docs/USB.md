@@ -151,6 +151,15 @@ Backends:
 | non-Windows stub | Linux/macOS | enumeration empty, `open_first` → `usb_not_supported` (protocol tests still run) |
 | libusb | Linux/macOS | future, drops in behind `IUsbTransport` |
 
+Both Windows `CreateFile` sites — `WinUsbTransport::open`
+(`probe`/`identify`/`status`) and `enrich_interfaces` (`list`'s interface
+detail) — build their open from the shared, unit-tested
+`usb/win_usb_open.hpp`. `FILE_FLAG_OVERLAPPED` is mandatory: on the cold
+unit (2026-10-07) a non-overlapped open of the same path made
+`WinUsb_Initialize` fail with `ERROR_INVALID_HANDLE` (6) while the
+overlapped open succeeded; both sites and the flag value are pinned by
+`tests/usb/identity_test.cpp`.
+
 Verified: both Windows sources compile clean (`-Wall -Wextra`) for
 `x86_64-windows-gnu` and a full `pakon-cli.exe` links; CLI smoke-tested;
 native MSVC Release builds with zero `/W4 /permissive-` warnings and all

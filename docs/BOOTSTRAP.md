@@ -121,10 +121,16 @@ Run on the Windows 11 machine with the cold unit attached:
 ```powershell
 cd "C:\Users\Clime Film Lab\Desktop\pakon"
 cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure   # expect 4/4, incl. bootstrap_probe
-$cli = (Get-ChildItem -Recurse build -Filter pakon-cli.exe | Select-Object -First 1).FullName
-& $cli --log trace probe 2>&1 | Tee-Object -FilePath probe-cold.log
+ctest --test-dir build -C Release --output-on-failure   # expect 4/4 suites, 45 cases
+.\build\apps\pakon-cli\Release\pakon-cli.exe --log trace probe 2>&1 | Tee-Object -FilePath probe-cold.log
 ```
+
+Note (2026-10-07): a first probe run failed inside the open path with
+`WinUsb_Initialize failed: 6` (`ERROR_INVALID_HANDLE`) because the
+transport's `CreateFile` opened non-overlapped while the enumeration path
+was opened `FILE_FLAG_OVERLAPPED` — the two sites had drifted. Both now
+share the unit-tested `usb/win_usb_open.hpp`; hardware re-verification of
+the open is exactly what this run does.
 
 Interpretation — record which row matched, with the date:
 
@@ -133,7 +139,8 @@ Interpretation — record which row matched, with the date:
 | `Personality: … raw: <8 bytes>` + exit 0 | **Stage-1 loader answered over WinUSB** — first protocol I/O from this stack. Save the 8 bytes; they are the comparison basis for the `F235_AA07` personality key |
 | `usb_short_transfer: personality read returned N bytes` | Loader answered partially — record `N` and the trace log; itself new evidence |
 | `control read 0xA9/0x0000/0x0000 failed: <code>` | Request rejected/stalled — record the Win32 code; may falsify the `wValue` inference (§ 3), which is still a result |
-| `WinUsb_Initialize failed` / access denied | Driver not WinUSB-bound → [WINUSB_TEST.md](WINUSB_TEST.md) step 4 first |
+| `CreateFile failed … Windows error <n> (<text>)` | The interface path could not be opened at all (stage 1) — record code + text; binding/permission problem |
+| `WinUsb_Initialize failed … Windows error <n> (<text>)` | CreateFile succeeded, initialization rejected the valid handle (stage 2) — record code + text; expected to be gone after the shared overlapped-open fix, and if it appears it is new evidence |
 | `discovered but not openable` | No function driver bound at all (Code 28) → install the INF package |
 | `no Pakon F-X35 device detected` | Nothing enumerated → check `pakon-cli list` / Device Manager |
 

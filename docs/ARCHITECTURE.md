@@ -52,6 +52,8 @@ src/pakon/
   usb/enumerate_win.cpp        SetupAPI: PnP device tree + device interfaces
                                (driver-independent — finds Code 28 devices)
   usb/win_usb_transport.cpp    WinUSB backend (Windows)
+  usb/win_usb_open.hpp         shared CreateFile parameters for both WinUSB
+                               open sites (overlapped; unit-tested — USB.md)
   usb/transport_stub.cpp       non-Windows stub (protocol tests still build)
   bootstrap/probe.hpp          stage-1 personality read constants + probe API
                                (evidence-pinned, read-only — BOOTSTRAP.md)

@@ -61,16 +61,19 @@ hardware yet.
   0`/`wIndex 0`/8 bytes, evidence-pinned) + `pakon-cli probe`, which opens
   a cold device for that single read and nothing else (no bulk, no
   control writes, no PPB/type-byte-0 exposure).
-- **Tests** — 43 cases: **43/43 passing on Linux/GCC (CTest 4/4,
+- **Tests** — 45 cases: **45/45 passing on Linux/GCC (CTest 4/4,
   2026-10-07)**; the native MSVC build previously passed 3/3 and must be
-  re-run for the new suite (build + test command: `docs/BOOTSTRAP.md` § 6).
+  re-run for the new suites (build + test command: `docs/BOOTSTRAP.md` § 6).
   All vectors verbatim from pakon-reference quotes and
   the `alibosworth/pakon-captures` corpus (F-135+ serial 16402); replay
   transport fails on any request not in the scripted captures. The
   `usb_identity` suite covers hardware-ID recognition (cold F235, warm
   F135, unrelated rejection, `&MI_` exclusion), serial-vs-PnP-location
-  parsing, discovered-but-not-openable representation, and pins the
-  WinUSB INF's DeviceInterfaceGUID to the C++ constant. The
+  parsing, discovered-but-not-openable representation, pins the
+  WinUSB INF's DeviceInterfaceGUID to the C++ constant, and pins the
+  shared WinUSB open parameters (`usb/win_usb_open.hpp`: overlapped flag
+  + both Windows open sites using the header — regression for the
+  2026-10-07 `ERROR_INVALID_HANDLE` discrepancy). The
   `bootstrap_probe` suite pins the probe request layout (and forbids
   `0xA2`/`0xA4`) and proves against a recording fake transport that a
   probe performs exactly one control read and no writes/bulk traffic.
