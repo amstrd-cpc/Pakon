@@ -1,9 +1,13 @@
 # Bootstrap (cold → warm): evidence status and the read-only probe
 
-**Status 2026-10-07 — evidence survey complete. Firmware upload is NOT
-implemented and no packet format for it exists in this repository; what is
-implemented instead is a conservative, read-only bootstrap probe
-(`pakon-cli probe`). Hardware validation of the probe is PENDING.**
+**Status 2026-10-07 — evidence survey complete. UPDATE (same day): every
+gap in § 3 has since been closed by OEM-artifact reverse engineering, and
+the whole cold→warm boot ran successfully on hardware — the validated
+sequence, artifacts, MD5s and evidence markers live in
+[BOOT_CHAIN.md](BOOT_CHAIN.md). What this repository *implements* is
+still the conservative, read-only bootstrap probe (`pakon-cli probe`);
+the C++ loader is designed but not yet written
+([LOADER_DESIGN.md](LOADER_DESIGN.md)).**
 
 Source of truth: pakon-reference `docs/usb-identity-and-firmware.md`,
 `docs/calibration.md` § The read, `docs/per-unit-data-and-safety.md` —
@@ -36,6 +40,16 @@ of that flow, and what was built in the meantime.
 | Reading, polling and PPB commands to known controllers have no recorded incident | `[CONFIRMED]` (by absence of incidents) | § 2.11 rule 8 |
 
 ## 3. Evidence gaps — why no upload path is implemented
+
+> **Update 2026-10-07:** all seven gaps below are closed — static sources
+> plus hardware confirmation, item by item, in
+> [BOOT_CHAIN.md](BOOT_CHAIN.md): the firmware bytes come from the pinned
+> OEM artifacts (`F235Ldr.sys`, `Pakon7.hex`, fetched + MD5-gated at run
+> time, never committed); the `0xA0`/`0xA3` request layout, the CPUCS
+> addresses, the re-enumeration mechanism, the PID/REV selection rule and
+> the stage-1 request set were recovered from `F235Ldr.sys` /
+> `F235usb2.inf` and confirmed byte-for-byte in the boot run. The list
+> below is kept as the historical survey.
 
 The sequence above names the *steps* but none of the *parameters*. The
 following are **not stated anywhere in this repository**; each would have to
@@ -132,6 +146,13 @@ was opened `FILE_FLAG_OVERLAPPED` — the two sites had drifted. Both now
 share the unit-tested `usb/win_usb_open.hpp`; hardware re-verification of
 the open is exactly what this run does.
 
+**Recorded 2026-10-07:** the open fix verified on hardware (both WinUSB
+open sites behave identically). The probe's cold baseline answered row 3
+(`0xA9` → win32 `121` — boot ROM silent, as expected); after the approved
+stage-1 upload the same read answered `C0-05-0F-35-F2-07-AA-04` (row 1),
+and the full boot transcript follows in [BOOT_CHAIN.md](BOOT_CHAIN.md)
+§ 3, with the interpretation chain in § 5.
+
 Interpretation — record which row matched, with the date:
 
 | Observed | Meaning |
@@ -147,8 +168,16 @@ Interpretation — record which row matched, with the date:
 **Stop condition:** `probe` is the only I/O. No `0xA0`/`0xA3`, no firmware
 bytes, no EEPROM access — those remain a separate future milestone requiring
 explicit approval and new evidence (WINUSB_TEST.md § Safety boundary).
+*(Superseded by an explicit full-boot approval on 2026-10-07; the approved
+sequence and its safety gates are recorded in
+[BOOT_CHAIN.md](BOOT_CHAIN.md) § 7 — EEPROM/bootloader/type-byte-0 rules
+remain in force unchanged.)*
 
 ## 7. Next steps once the probe result exists
+
+*(2026-10-07: items 1–3 satisfied — personality layout decoded as the
+registry key `F235_AA07`, evidence collected, loader design written;
+see [BOOT_CHAIN.md](BOOT_CHAIN.md) and [LOADER_DESIGN.md](LOADER_DESIGN.md).)*
 
 1. Compare the observed 8 bytes with the reference's personality key
    (`F235_AA07`); if a layout becomes derivable, document it with its

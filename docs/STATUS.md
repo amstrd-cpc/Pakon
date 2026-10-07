@@ -2,16 +2,29 @@
 
 Last updated: 2026-10-07. Scope: Phase 1–4 first deliverable (structure, USB
 detection, PPB infrastructure, safe identify/status comms, tests, CLI, docs)
-plus the bootstrap evidence survey and read-only probe.
+plus the bootstrap evidence survey, the read-only probe, and the
+**validated cold→warm boot chain** ([BOOT_CHAIN.md](BOOT_CHAIN.md)) with its
+loader-port design ([LOADER_DESIGN.md](LOADER_DESIGN.md)).
 
 Legend for evidence: **[COMPLETED]** verified by build/test evidence in this
-repository · **[PHYSICAL TEST REQUIRED]** nothing here has touched real
-hardware yet.
+repository · **[HARDWARE-VALIDATED]** executed and recorded on the lab unit
+(2026-10-07, [BOOT_CHAIN.md](BOOT_CHAIN.md)) · **[PHYSICAL TEST REQUIRED]**
+not yet run against real hardware.
 
 ---
 
 ## COMPLETED
 
+- **Cold→warm boot chain validated on hardware (2026-10-07)** —
+  [BOOT_CHAIN.md](BOOT_CHAIN.md): the OEM-derived sequence ran end-to-end
+  on the lab unit — stage-1 upload (360 × `0xA0`, 4476 B, extracted from
+  MD5-pinned `F235Ldr.sys`), `0xA4` preamble, gated `0xA9` answered
+  `C0-05-0F-35-F2-07-AA-04` (→ `F235_AA07` → `Pakon7.hex`), Pakon7 download
+  (709 × `0xA3` + 19 × `0xA0`, both shape-gated), final run → device
+  re-enumerated as `USB\VID_0F05&PID_F135\010-203-04`, `status=OK`,
+  `service=WINUSB`. Every write volatile (unplug = cold); probe unchanged.
+  Frozen procedure: `tools/pakon_boot_reference.ps1`. Remaining UNKNOWNs
+  listed in BOOT_CHAIN.md § 8.
 - **Reference analysis** — `docs/PAKON_REFERENCE.md`: what pakon-reference
   provides, what translates directly, gaps/limitations, file-by-file
   citations. pakon-reference is treated as primary spec throughout.
@@ -82,8 +95,11 @@ hardware yet.
   `USB\VID_0F05&PID_F135&REV_0002`; project DeviceInterfaceGUID
   `{0e9e6f29-e70a-4582-8d02-bde3ad701252}`; no binaries, no firmware) +
   `driver/README.md` (catalog signing via WDK `inf2cat`, install/removal)
-  + `docs/WINUSB_TEST.md` (exact manual procedure). **Physical binding
-  test: PENDING — no hardware result exists.**
+  + `docs/WINUSB_TEST.md` (exact manual procedure). **Physical bindings
+  observed 2026-10-07** (cold probe opened through this package's GUID;
+  post-boot F135 enumerated with `service=WINUSB` — attribution query
+  pending, `BOOT_CHAIN.md` § 6); the WINUSB_TEST.md evidence table itself
+  is still pending.
 - **Documentation** — `PAKON_REFERENCE.md`, `ARCHITECTURE.md`, `USB.md`,
   `PPB.md`, `SCANNER.md`, `STATUS.md`, `WINUSB_TEST.md`; headers carry
   per-claim citations.
@@ -100,12 +116,13 @@ hardware yet.
 
 ## NOT IMPLEMENTED (by design for this phase)
 
-- Firmware loading for cold (`0f05:f235`) devices — firmware bytes excluded
-  by pakon-reference's own scope rules, and the upload request layout /
-  CPUCS / re-enumeration details are not documented in-repo either; the
-  seven evidence gaps are enumerated in `docs/BOOTSTRAP.md` § 3. The
-  read-only bootstrap probe (`pakon-cli probe`) is the implemented
-  substitute.
+- Firmware loading **in the repository** — the evidence gaps below are now
+  closed (OEM-artifact reverse engineering + hardware run,
+  [BOOT_CHAIN.md](BOOT_CHAIN.md)) and the sequence is validated as an
+  approved procedure (`tools/pakon_boot_reference.ps1`), but no C++
+  loader exists yet; component design and rollout:
+  [LOADER_DESIGN.md](LOADER_DESIGN.md). Firmware bytes remain excluded
+  from the repo by scope rule (fetched + MD5-gated at run time).
 - Initialization / scan / teardown sequences (Phase 5), film transport
   (Phase 6), image acquisition (7), decoding (8), calibration EEPROM read
   (9), output (10).
@@ -115,34 +132,30 @@ hardware yet.
 
 ## BLOCKED
 
-- **I/O on a machine where the legacy Pakon driver owns the device.**
-  WinUSB cannot open a WinUSB-unbound device. Two documented paths exist,
-  neither taken yet (needs a decision + a machine with the unit):
-  1. `Pakon135IoctlTransport` — talk IOCTL `0x222090`/`0x222059` +
-     `ReadFile(EP 0x86)` through the *installed* driver (documented in
-     pakon-tlx-macos `docs/PROTOCOL.md`), modifying nothing;
-  2. rebind the scanner to WinUSB (affects the legacy stack — not to be
-     done without explicit approval). A test package is ready for this:
-     `driver/PakonWinUSB.inf`, physical validation pending
-     (`docs/WINUSB_TEST.md`).
-  Enumeration (`list`) already works regardless — including devices with
-  no function driver at all (Code 28).
+- ~~I/O on a machine where the legacy Pakon driver owns the device~~ —
+  **resolved on the lab machine (2026-10-07):** the cold unit opens over
+  WinUSB through `driver/PakonWinUSB.inf` (probe + full boot ran, see
+  [BOOT_CHAIN.md](BOOT_CHAIN.md)); the `Pakon135IoctlTransport` option
+  remains only as a fallback for units still owned by the legacy stack.
+  Enumeration (`list`) works regardless — including devices with no
+  function driver at all (Code 28).
 
 ## PHYSICAL TEST REQUIRED
 
-Nothing has been run against real hardware. Specifically untested:
+Superseded 2026-10-07 for the bootstrap/boot items: the probe and the
+full cold→warm boot ran on the lab unit and their outputs are recorded in
+[BOOT_CHAIN.md](BOOT_CHAIN.md). Still untested:
 
 1. `pakon-cli list` against an attached unit (cold + warm identities,
-   serial parse, endpoint detail). *The scanner was detached from the
-   lab machine on 2026-10-06 (both devnodes `Present=False`, phantom
-   entries; cold `Service` absent → Code 28 state unchanged), so even
-   the discovery fix has no live-device result yet.*
-2. **The WinUSB binding test** — install `driver/PakonWinUSB.inf` on the
-   cold unit, verify `Service=WinUSB` + interface GUID, re-run `list`
-   (`identify`/`status` must refuse: firmware loading not implemented).
-   Exact procedure + evidence table: `docs/WINUSB_TEST.md` (PENDING).
-   This test also adjudicates the SET_CONFIGURATION-at-bind risk noted
-   in the WinUSB decision (KMDF fallback trigger).
+   serial parse, endpoint detail) — the hardware runs used the approved
+   PowerShell procedure, not the CLI enumerator.
+2. **The WinUSB binding test's own evidence table** (`docs/WINUSB_TEST.md`)
+   — the *bindings themselves* are now observed: cold `0f05:f235` opened
+   over WinUSB with interface GUID `{0e9e6f29…}` from the first probe
+   session, and the post-boot `0f05:f135&REV_0002` enumerated with
+   `service=WINUSB` (attribution query pending, BOOT_CHAIN.md § 6). The
+   `identify`/`status`-refuse-cold checks and the SET_CONFIGURATION-at-bind
+   risk adjudication still need their run.
 3. The full connect handshake on a real unit, including the first-open vs
    later-open reply behavior.
 4. Presence probes `0x44`/`0x24` on a real F-135+ (and an F-135, if
@@ -153,10 +166,11 @@ Nothing has been run against real hardware. Specifically untested:
    stack; our frames must be confirmed to elicit them.
 6. Any claim that the driver-stack coexists with the running legacy
    software — assumed only, untested.
-7. `pakon-cli probe` against the cold unit — the first protocol I/O from
-   this stack (one vendor control read `0xA9`). Exact command, expected
-   output and an interpretation table for every outcome:
-   `docs/BOOTSTRAP.md` § 6 (PENDING — record verbatim).
+7. ~~`pakon-cli probe` against the cold unit~~ — **recorded 2026-10-07:**
+   cold ROM baseline `0xA9` → win32 `121` (no answer); after the stage-1
+   upload the same read answered `C0-05-0F-35-F2-07-AA-04`, and the full
+   boot transcript follows (`BOOT_CHAIN.md` § 3, § 5). A C++-path probe
+   run against hardware (via the MSVC build) is still worth repeating.
 
 ## UNKNOWN / NEEDS INVESTIGATION
 
@@ -173,19 +187,17 @@ Nothing has been run against real hardware. Specifically untested:
 
 ## NEXT RECOMMENDED STEP
 
-1. Attach the cold F135+ and run `docs/WINUSB_TEST.md` (evidence table
-   included) — this decides WinUSB adequacy for the cold device and
-   removes the `list`-against-hardware gap.
-2. Run the read-only bootstrap probe on the same machine:
-   `docs/BOOTSTRAP.md` § 6 (exact PowerShell command + interpretation
-   table). It is the only approved I/O against the cold device and the
-   first evidence about the stage-1 loader's behavior in this stack.
-3. Decide the device-access path (BLOCKED item: IOCTL transport vs WinUSB
-   rebind); implement `Pakon135IoctlTransport` if approved — it keeps the
-   legacy stack untouched.
-4. Then: physical `list` → `identify` → `status` on a warm unit, in that
-   order, with `--log trace` captured for the record.
-5. Phase 5: init/scan/teardown sequences from command-reference.md +
+1. Re-run the MSVC build + CTest (expect 4 suites / 45 cases) on the
+   Windows target, then run the read-only attribution diagnostic
+   (`pakon-cli attrib`) against the enumerated F135 — it completes
+   [BOOT_CHAIN.md](BOOT_CHAIN.md) § 6 (`DeviceDesc` / `FriendlyName` /
+   bound INF; no device I/O).
+2. Implement the loader per [LOADER_DESIGN.md](LOADER_DESIGN.md),
+   component by component, each gated on its replay test **and** an
+   explicit hardware go-ahead; `tools/pakon_boot_reference.ps1` stays
+   the trusted procedure until each C++ step is validated against it.
+3. Then: physical `list` → `identify` → `status` on the warm unit, in
+   that order, with `--log trace` captured for the record (first PPB
+   traffic from this stack on hardware).
+4. Phase 5: init/scan/teardown sequences from command-reference.md +
    capture replays, still without motion until explicitly approved.
-6. Firmware upload only after the BOOTSTRAP.md § 3 evidence gaps are
-   closed and a design milestone is explicitly approved.
