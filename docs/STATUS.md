@@ -1,7 +1,8 @@
 # Status
 
-Last updated: 2026-10-06. Scope: Phase 1–4 first deliverable (structure, USB
-detection, PPB infrastructure, safe identify/status comms, tests, CLI, docs).
+Last updated: 2026-10-07. Scope: Phase 1–4 first deliverable (structure, USB
+detection, PPB infrastructure, safe identify/status comms, tests, CLI, docs)
+plus the bootstrap evidence survey and read-only probe.
 
 Legend for evidence: **[COMPLETED]** verified by build/test evidence in this
 repository · **[PHYSICAL TEST REQUIRED]** nothing here has touched real
@@ -48,16 +49,31 @@ hardware yet.
   probes → model, module info `0x07`, bridge info HOST `0x03`), status
   (HOST/light/motor polls + `0x83`/`0x84`/`0x88` reads), explicit
   `State`/`Model` enums with logged transitions.
-- **pakon-cli** — `list` (enumeration only), `identify`, `status`,
-  `--log LEVEL`.
-- **Tests** — 36 cases, all passing on Linux/GCC **and** the native MSVC
-  build (CTest 3/3). All vectors verbatim from pakon-reference quotes and
+- **pakon-cli** — `list` (enumeration only), `probe` (cold-device read-only
+  bootstrap probe: one documented vendor control read), `identify`,
+  `status`, `--log LEVEL`.
+- **Bootstrap evidence survey + read-only probe** — `docs/BOOTSTRAP.md`
+  records how far repo evidence reaches for the cold→warm firmware path:
+  the FX2 sequence is documented **by name only** and the firmware bytes
+  are excluded by scope rules, so no upload path and no packet format is
+  implemented (seven enumerated evidence gaps). Built instead:
+  `src/pakon/bootstrap/probe.*` (stage-1 personality read `0xA9`/`wValue
+  0`/`wIndex 0`/8 bytes, evidence-pinned) + `pakon-cli probe`, which opens
+  a cold device for that single read and nothing else (no bulk, no
+  control writes, no PPB/type-byte-0 exposure).
+- **Tests** — 43 cases: **43/43 passing on Linux/GCC (CTest 4/4,
+  2026-10-07)**; the native MSVC build previously passed 3/3 and must be
+  re-run for the new suite (build + test command: `docs/BOOTSTRAP.md` § 6).
+  All vectors verbatim from pakon-reference quotes and
   the `alibosworth/pakon-captures` corpus (F-135+ serial 16402); replay
   transport fails on any request not in the scripted captures. The
   `usb_identity` suite covers hardware-ID recognition (cold F235, warm
   F135, unrelated rejection, `&MI_` exclusion), serial-vs-PnP-location
   parsing, discovered-but-not-openable representation, and pins the
-  WinUSB INF's DeviceInterfaceGUID to the C++ constant.
+  WinUSB INF's DeviceInterfaceGUID to the C++ constant. The
+  `bootstrap_probe` suite pins the probe request layout (and forbids
+  `0xA2`/`0xA4`) and proves against a recording fake transport that a
+  probe performs exactly one control read and no writes/bulk traffic.
 - **WinUSB driver package** — `driver/PakonWinUSB.inf` (in-box
   `winusb.sys` via `winusb.inf`; targets `USB\VID_0F05&PID_F235` and
   `USB\VID_0F05&PID_F135&REV_0002`; project DeviceInterfaceGUID
@@ -81,8 +97,12 @@ hardware yet.
 
 ## NOT IMPLEMENTED (by design for this phase)
 
-- Firmware loading for cold (`0f05:f235`) devices — out of scope (firmware
-  bytes excluded by pakon-reference's own scope rules).
+- Firmware loading for cold (`0f05:f235`) devices — firmware bytes excluded
+  by pakon-reference's own scope rules, and the upload request layout /
+  CPUCS / re-enumeration details are not documented in-repo either; the
+  seven evidence gaps are enumerated in `docs/BOOTSTRAP.md` § 3. The
+  read-only bootstrap probe (`pakon-cli probe`) is the implemented
+  substitute.
 - Initialization / scan / teardown sequences (Phase 5), film transport
   (Phase 6), image acquisition (7), decoding (8), calibration EEPROM read
   (9), output (10).
@@ -130,6 +150,10 @@ Nothing has been run against real hardware. Specifically untested:
    stack; our frames must be confirmed to elicit them.
 6. Any claim that the driver-stack coexists with the running legacy
    software — assumed only, untested.
+7. `pakon-cli probe` against the cold unit — the first protocol I/O from
+   this stack (one vendor control read `0xA9`). Exact command, expected
+   output and an interpretation table for every outcome:
+   `docs/BOOTSTRAP.md` § 6 (PENDING — record verbatim).
 
 ## UNKNOWN / NEEDS INVESTIGATION
 
@@ -149,10 +173,16 @@ Nothing has been run against real hardware. Specifically untested:
 1. Attach the cold F135+ and run `docs/WINUSB_TEST.md` (evidence table
    included) — this decides WinUSB adequacy for the cold device and
    removes the `list`-against-hardware gap.
-2. Decide the device-access path (BLOCKED item: IOCTL transport vs WinUSB
+2. Run the read-only bootstrap probe on the same machine:
+   `docs/BOOTSTRAP.md` § 6 (exact PowerShell command + interpretation
+   table). It is the only approved I/O against the cold device and the
+   first evidence about the stage-1 loader's behavior in this stack.
+3. Decide the device-access path (BLOCKED item: IOCTL transport vs WinUSB
    rebind); implement `Pakon135IoctlTransport` if approved — it keeps the
    legacy stack untouched.
-3. Then: physical `list` → `identify` → `status` on a warm unit, in that
+4. Then: physical `list` → `identify` → `status` on a warm unit, in that
    order, with `--log trace` captured for the record.
-4. Phase 5: init/scan/teardown sequences from command-reference.md +
+5. Phase 5: init/scan/teardown sequences from command-reference.md +
    capture replays, still without motion until explicitly approved.
+6. Firmware upload only after the BOOTSTRAP.md § 3 evidence gaps are
+   closed and a design milestone is explicitly approved.

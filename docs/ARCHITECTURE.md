@@ -7,7 +7,7 @@ primary specification; nothing in this repository invents protocol.
 ## Layers
 
 ```
-apps/pakon-cli                command-line tool (list / identify / status)
+apps/pakon-cli                command-line tool (list / probe / identify / status)
         │
 src/pakon/scanner             session + state machine + model detection
         │
@@ -18,6 +18,11 @@ src/pakon/usb                 IUsbTransport abstraction + backends
       scanner hardware (FX2 bridge)
 ```
 
+`src/pakon/bootstrap` is a sibling side path: the CLI's `probe` command
+talks straight to `usb::IUsbTransport` through evidence-pinned read-only
+helpers (a cold device has no PPB stack yet — see
+[BOOTSTRAP.md](BOOTSTRAP.md)).
+
 Cross-cutting: `errors/` (Result/Error types), `logging/` (leveled log + packet
 hex dumps), `protocol/` (header-only constants: bus addresses, command bytes —
 no logic).
@@ -26,6 +31,8 @@ Rules enforced by this layering:
 
 - `ppb` never includes Windows headers; it talks to `usb::IUsbTransport` only.
 - `scanner` never builds raw frames; it uses `ppb::Client`.
+- `bootstrap` may issue only the documented stage-1 personality read
+  (`0xA9`, `wIndex 0`) — no bulk, no control writes (test-pinned).
 - `protocol/` constants are documented against specific pakon-reference files
   (citations in the headers).
 
@@ -46,6 +53,9 @@ src/pakon/
                                (driver-independent — finds Code 28 devices)
   usb/win_usb_transport.cpp    WinUSB backend (Windows)
   usb/transport_stub.cpp       non-Windows stub (protocol tests still build)
+  bootstrap/probe.hpp          stage-1 personality read constants + probe API
+                               (evidence-pinned, read-only — BOOTSTRAP.md)
+  bootstrap/probe.cpp          the single permitted control read, nothing else
   ppb/packet.hpp               Frame serialize/parse, reply parsing, builders
   ppb/client.hpp               exchange() + destination allow-list
   scanner/scanner.hpp          connect / identify / status, State/Model enums
@@ -57,7 +67,9 @@ tests/                         self-contained harness (no test framework dep)
   ppb/packet_test.cpp          frame vectors from pakon-reference + captures
   scanner/scanner_replay_test.cpp  connect/identify/status replay
   usb/identity_test.cpp        hardware-ID recognition + INF/GUID consistency
+  bootstrap/probe_test.cpp     probe request pinning + one-read-only-I/O proof
 docs/                          this documentation set
+  BOOTSTRAP.md                 cold→warm evidence status + probe procedure
   WINUSB_TEST.md               pending physical WinUSB binding test (procedure)
 ```
 
@@ -112,6 +124,7 @@ layers against the non-Windows USB stub so tests run anywhere. See
 | 2 | USB detection (`pakon-cli list`) | done, physical check pending |
 | 3 | PPB packet infrastructure | done |
 | 4 | safe comms: identify/status | done, physical check pending |
+| — | bootstrap: evidence survey + read-only probe (`pakon-cli probe`) | done, hardware check pending (BOOTSTRAP.md) |
 | 5 | scanner state machine (init/scan sequences) | not started |
 | 6 | transport (film motion) | not started |
 | 7 | image acquisition | not started |

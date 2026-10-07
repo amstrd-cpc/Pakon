@@ -18,8 +18,13 @@ Our implementation: `src/pakon/usb/`.
 presence probes (see [SCANNER.md](SCANNER.md)).
 
 This project **does not load firmware**. A cold device is listed but not
-opened (`open_first(cold_ok=false)` returns a clear error). The firmware bytes
-are out of scope per pakon-reference's own scope rules.
+opened by the scanner commands (`open_first(cold_ok=false)` returns a clear
+error). The firmware bytes are out of scope per pakon-reference's own scope
+rules, and the upload request layout is not documented in-repo — the exact
+evidence gaps are enumerated in [BOOTSTRAP.md](BOOTSTRAP.md). The one
+exception that does open a cold device read-only is `pakon-cli probe`
+([BOOTSTRAP.md](BOOTSTRAP.md) § 4): exactly one documented vendor control
+read, no bulk traffic, no writes.
 
 ## Endpoints
 
@@ -92,7 +97,9 @@ Properties of enumeration:
   are unavailable instead of failing.
 
 `pakon-cli list` output is enumeration-only; it does not open a PPB
-session. `identify`/`status` go through `open_first`, which refuses
+session. `probe` opens the device with `open_first(cold_ok=true)` and sends
+only the documented stage-1 personality read ([BOOTSTRAP.md](BOOTSTRAP.md)).
+`identify`/`status` go through `open_first`, which refuses
 devices without an interface (honest "discovered but not openable" error)
 and refuses cold devices (firmware loading not implemented).
 
@@ -131,7 +138,9 @@ One interface for all higher layers:
   transfers up to 20480 bytes).
 - `control_read/control_write` — vendor control requests; the documented
   read-only EEPROM path uses `0xA4` (select, `wValue 0x00A5`,
-  `wIndex 0x1234`) + `0xA9` (read, ≤32 bytes). Vendor `0xA2` is an EEPROM
+  `wIndex 0x1234`) + `0xA9` (read, ≤32 bytes), and the stage-1 personality
+  path uses `0xA9` (`wIndex 0`, 8 bytes — the `probe` command; see
+  [BOOTSTRAP.md](BOOTSTRAP.md)). Vendor `0xA2` is an EEPROM
   **write** and is never issued by this stack.
 
 Backends:
@@ -171,7 +180,10 @@ path for the first physical test (STATUS.md).
 
 ## Safety rules implemented here
 
-1. Cold devices are never opened (no firmware loading).
+1. Cold devices are opened only by `probe`, with an explicit
+   `cold_ok=true`, for exactly one read-only vendor control request
+   (stage-1 personality read — BOOTSTRAP.md); `identify`/`status` and the
+   scanner layer never open them (no firmware loading).
 2. Control writes are stubbed except through explicit, documented sequences;
    vendor `0xA2` (EEPROM write) does not exist anywhere in the codebase.
 3. All outbound PPB frames are checked against the controller address
