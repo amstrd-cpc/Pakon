@@ -1,4 +1,9 @@
-// USB identity recognition tests — no hardware, no Windows APIs.
+// USB-layer pins — no hardware, no Windows APIs:
+//   - hardware-ID recognition + PnP instance parsing (identity.hpp);
+//   - WinUSB INF consistency (GUID pinned to the C++ constant);
+//   - WinUSB open parameters (win_usb_open.hpp): the overlapped flag and
+//     both source open sites sharing one header (regression for the
+//     2026-10-07 ERROR_INVALID_HANDLE discrepancy).
 //
 // Vectors are grounded in evidence, not invented:
 //   - "USB\VID_0F05&PID_F235&REV_::07" and the device instance
@@ -14,6 +19,7 @@
 
 #include "pakon/usb/identity.hpp"
 #include "pakon/usb/transport.hpp"
+#include "pakon/usb/win_usb_open.hpp"
 #include "support/test_harness.hpp"
 
 #include <fstream>
@@ -214,6 +220,45 @@ PAKON_TEST(device_interface_guid_matches_inf_package) {
     // In-box WinUSB: the INF must install Microsoft's driver, not ours.
     EXPECT(text.find("winusb.inf") != std::string::npos);
     EXPECT(text.find("WINUSB.NT") != std::string::npos);
+}
+
+PAKON_TEST(winusb_open_params_pin_overlapped_flag) {
+    // Both Windows WinUSB open sites share one parameter set
+    // (usb/win_usb_open.hpp). FILE_FLAG_OVERLAPPED is mandatory: on the
+    // real cold unit (2026-10-07, Service=WINUSB) the same device path
+    // opened with FILE_ATTRIBUTE_NORMAL (0x80) made WinUsb_Initialize
+    // fail with ERROR_INVALID_HANDLE (6), while the overlapped open
+    // succeeded — that A/B is the entire list-vs-probe discrepancy.
+    using pakon::usb::kWinUsbOpenParams;
+    EXPECT_EQ(kWinUsbOpenParams.flags_and_attributes, 0x40000000ul); // FILE_FLAG_OVERLAPPED
+    EXPECT(kWinUsbOpenParams.flags_and_attributes != 0x80ul);        // never FILE_ATTRIBUTE_NORMAL
+    EXPECT_EQ(kWinUsbOpenParams.desired_access, 0xc0000000ul);       // GENERIC_READ|GENERIC_WRITE
+    EXPECT_EQ(kWinUsbOpenParams.share_mode, 0x3ul);                  // FILE_SHARE_READ|FILE_SHARE_WRITE
+    EXPECT_EQ(kWinUsbOpenParams.creation_disposition, 3ul);          // OPEN_EXISTING
+}
+
+PAKON_TEST(winusb_open_sites_share_one_params_header) {
+    // Source-level pin (same technique as the INF/GUID pin above): both
+    // Windows open sites must include and use kWinUsbOpenParams, and
+    // neither may spell out its own dwFlagsAndAttributes — the
+    // 2026-10-07 ERROR_INVALID_HANDLE (6) bug was exactly these two
+    // files drifting apart (enumeration overlapped, transport not).
+    const char* sites[] = {"src/pakon/usb/win_usb_transport.cpp",
+                           "src/pakon/usb/enumerate_win.cpp"};
+    for (const char* site : sites) {
+        std::ifstream source(std::string(PAKON_SOURCE_DIR) + "/" + site);
+        EXPECT(source.good());
+        if (!source) {
+            continue;
+        }
+        std::stringstream contents;
+        contents << source.rdbuf();
+        const std::string text = contents.str();
+
+        EXPECT(text.find("pakon/usb/win_usb_open.hpp") != std::string::npos);
+        EXPECT(text.find("kWinUsbOpenParams") != std::string::npos);
+        EXPECT(text.find("FILE_ATTRIBUTE_NORMAL") == std::string::npos);
+    }
 }
 
 int main() {

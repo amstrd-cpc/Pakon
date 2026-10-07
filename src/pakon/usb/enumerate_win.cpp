@@ -27,6 +27,7 @@
 
 #include "pakon/usb/identity.hpp"
 #include "pakon/usb/transport.hpp"
+#include "pakon/usb/win_usb_open.hpp"
 
 #include <windows.h>
 #include <setupapi.h>
@@ -231,15 +232,27 @@ std::string pnp_only_note(const Discovery& discovery, const DeviceInfo& device) 
 // Try to add interface/endpoint detail via WinUSB. Fails harmlessly when
 // the device is not WinUSB-bound (e.g. legacy Pakon driver owns it).
 void enrich_interfaces(DeviceInfo& info) {
-    HANDLE device = CreateFileA(info.device_path.c_str(), GENERIC_READ | GENERIC_WRITE,
-                                FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                                OPEN_EXISTING, FILE_FLAG_OVERLAPPED,
-                                nullptr);
+    // Same shared, unit-tested open parameters as the transport
+    // (usb/win_usb_open.hpp): both sites must open identically, or they
+    // drift — the transport's non-overlapped open is what produced
+    // ERROR_INVALID_HANDLE (6) from WinUsb_Initialize on the cold unit
+    // (2026-10-07) while this path succeeded.
+    HANDLE device = CreateFileA(
+        info.device_path.c_str(),
+        static_cast<DWORD>(kWinUsbOpenParams.desired_access),
+        static_cast<DWORD>(kWinUsbOpenParams.share_mode), nullptr,
+        static_cast<DWORD>(kWinUsbOpenParams.creation_disposition),
+        static_cast<DWORD>(kWinUsbOpenParams.flags_and_attributes), nullptr);
     if (device == INVALID_HANDLE_VALUE) {
         // Retry read-only: some bindings allow query but not write access.
-        device = CreateFileA(info.device_path.c_str(), GENERIC_READ,
-                             FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                             OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+        WinUsbOpenParams read_only = kWinUsbOpenParams;
+        read_only.desired_access = 0x80000000ul; // GENERIC_READ
+        device = CreateFileA(
+            info.device_path.c_str(),
+            static_cast<DWORD>(read_only.desired_access),
+            static_cast<DWORD>(read_only.share_mode), nullptr,
+            static_cast<DWORD>(read_only.creation_disposition),
+            static_cast<DWORD>(read_only.flags_and_attributes), nullptr);
     }
     if (device == INVALID_HANDLE_VALUE) {
         info.interface_note =

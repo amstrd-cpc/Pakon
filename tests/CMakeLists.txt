@@ -10,9 +10,11 @@ target_link_libraries(scanner_replay_test PRIVATE pakon_core)
 target_include_directories(scanner_replay_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME scanner_replay COMMAND scanner_replay_test)
 
-# Hardware-ID recognition + WinUSB INF consistency (pure string logic,
-# no hardware, no Windows APIs). PAKON_SOURCE_DIR lets the test read
-# driver/PakonWinUSB.inf and pin its GUID to the C++ constant.
+# Hardware-ID recognition + WinUSB INF consistency + WinUSB open-parameter
+# pins (pure string/value logic, no hardware, no Windows APIs).
+# PAKON_SOURCE_DIR lets the test read driver/PakonWinUSB.inf and pin its
+# GUID to the C++ constant, and read both Windows open sites to pin them
+# to usb/win_usb_open.hpp.
 add_executable(usb_identity_test usb/identity_test.cpp)
 target_link_libraries(usb_identity_test PRIVATE pakon_core)
 target_include_directories(usb_identity_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

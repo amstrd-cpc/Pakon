@@ -11,6 +11,7 @@
 #ifdef _WIN32
 
 #include "pakon/usb/transport.hpp"
+#include "pakon/usb/win_usb_open.hpp"
 #include "pakon/logging/logger.hpp"
 
 #include <windows.h>
@@ -20,32 +21,81 @@
 #include <format>
 
 namespace pakon::usb {
+
+// The shared open parameters are used verbatim by both Windows open
+// sites (this file and enumerate_win.cpp); pin them to the real Win32
+// macros so a value typo cannot compile (any drift between the sites is
+// additionally pinned by tests/usb/identity_test.cpp on any host).
+static_assert(kWinUsbOpenParams.desired_access ==
+              static_cast<unsigned long>(GENERIC_READ | GENERIC_WRITE));
+static_assert(kWinUsbOpenParams.share_mode ==
+              static_cast<unsigned long>(FILE_SHARE_READ | FILE_SHARE_WRITE));
+static_assert(kWinUsbOpenParams.creation_disposition ==
+              static_cast<unsigned long>(OPEN_EXISTING));
+static_assert(kWinUsbOpenParams.flags_and_attributes ==
+              static_cast<unsigned long>(FILE_FLAG_OVERLAPPED));
+
 namespace {
+
+// Human-readable text for a Win32 error code (FormatMessage), with the
+// trailing newline/period FormatMessage appends trimmed off. "unknown"
+// when the system has no text for the code.
+std::string win32_error_text(DWORD error) {
+    char buffer[512] = {};
+    const DWORD length = FormatMessageA(
+        FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr,
+        error, 0, buffer, static_cast<DWORD>(sizeof(buffer)), nullptr);
+    if (length == 0) {
+        return "unknown";
+    }
+    std::string text(buffer, length);
+    while (!text.empty() && (text.back() == '\r' || text.back() == '\n' ||
+                             text.back() == ' ' || text.back() == '.')) {
+        text.pop_back();
+    }
+    return text;
+}
 
 class WinUsbTransport final : public IUsbTransport {
 public:
     static Result<std::unique_ptr<WinUsbTransport>> open(const DeviceInfo& info) {
-        HANDLE device = CreateFileA(info.device_path.c_str(), GENERIC_READ | GENERIC_WRITE,
-                                    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        // Shared, unit-tested parameters (usb/win_usb_open.hpp). The
+        // handle MUST be opened overlapped: a non-overlapped open of the
+        // same path made WinUsb_Initialize fail with ERROR_INVALID_HANDLE
+        // on the real cold unit (2026-10-07) while the overlapped
+        // enumeration open succeeded — see the header for the evidence.
+        // Stage 1: CreateFile. Its failure is reported on its own, with
+        // the Windows error code, and never confused with stage 2.
+        HANDLE device = CreateFileA(
+            info.device_path.c_str(),
+            static_cast<DWORD>(kWinUsbOpenParams.desired_access),
+            static_cast<DWORD>(kWinUsbOpenParams.share_mode), nullptr,
+            static_cast<DWORD>(kWinUsbOpenParams.creation_disposition),
+            static_cast<DWORD>(kWinUsbOpenParams.flags_and_attributes), nullptr);
         if (device == INVALID_HANDLE_VALUE) {
-            const auto error = GetLastError();
+            const DWORD error = GetLastError();
             const auto kind = (error == ERROR_ACCESS_DENIED)
                                   ? ErrorKind::usb_access_denied
                                   : ErrorKind::usb_open_failed;
             return failure<std::unique_ptr<WinUsbTransport>>(
-                kind, std::format("CreateFile({}) failed: {}", info.device_path, error));
+                kind, std::format("CreateFile failed for {}: Windows error {} ({})",
+                                  info.device_path, error,
+                                  win32_error_text(error)));
         }
 
+        // Stage 2: WinUsb_Initialize on the raw CreateFile handle (the
+        // handle is neither closed nor replaced between the stages).
         WINUSB_INTERFACE_HANDLE usb = nullptr;
         if (!WinUsb_Initialize(device, &usb)) {
-            const auto error = GetLastError();
+            const DWORD error = GetLastError();
             CloseHandle(device);
             return failure<std::unique_ptr<WinUsbTransport>>(
                 ErrorKind::usb_open_failed,
-                std::format("WinUsb_Initialize failed: {} (device is probably owned "
-                            "by the installed Pakon driver, not WinUSB)",
-                            error));
+                std::format("WinUsb_Initialize failed for {}: Windows error {} ({}) "
+                            "— CreateFile succeeded, so the handle itself is valid; "
+                            "the bound function driver may not be WinUSB "
+                            "(see docs/USB.md)",
+                            info.device_path, error, win32_error_text(error)));
         }
 
         auto transport = std::unique_ptr<WinUsbTransport>(
