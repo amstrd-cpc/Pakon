@@ -185,16 +185,20 @@ full cold→warm boot ran on the lab unit and their outputs are recorded in
 4. ~~Presence probes `0x44`/`0x24` on a real F-135+~~ — **recorded
    2026-10-08:** `0x44` → status `00` (present), `0x24` → status `01`
    (absent) = exactly the F-135+ answer pattern documented in
-   `scanner.cpp`. Full model determination did **not** complete (item 5);
-   an F-135 (inverted pattern) still untested.
+   `scanner.cpp`. Full model determination completed later the same day
+   (item 5); an F-135 (inverted pattern) still untested.
 5. Module-info / bridge-info / status register reads (`0x83`, `0x84`,
    `0x88`) — replies are capture-verified but were captured from another
    stack; our frames must be confirmed to elicit them.
-   **First module-info read on hardware (2026-10-08): the device
-   answered a well-formed 12-byte reply** (`01 0e 40 88` + payload —
-   count = 2 + 12, address echoed), but `is_success` rejected its
-   documented READ flags byte `0x88` (see UNKNOWN) and `identify`
-   stopped; bridge/status reads still unrun.
+   **Module-info and bridge-info reads on hardware (2026-10-08):**
+   recorded after `254e8a1` — light `01 03 40 0c 07` → `01 0e 40 88` +
+   12 B payload, motor `01 03 44 0c 07` → `01 0e 44 08` + 12 B, bridge
+   `01 03 10 02 03` → `01 04 10 88 0f 03` (bridge bytes `0f 03` match the
+   corpus; both `0x88` and `0x08` accepted by `is_read_success`),
+   completing `identify` as `Model: F-135+`. **The lab unit's
+   module-info payloads differ entirely from the capture corpus**
+   (see UNKNOWN below). Status register reads (`0x83`, `0x84`, `0x88`)
+   still unrun — they execute with the `status` command.
 6. Any claim that the driver-stack coexists with the running legacy
    software — assumed only, untested.
 7. ~~`pakon-cli probe` against the cold unit~~ — **recorded 2026-10-07:**
@@ -220,14 +224,28 @@ full cold→warm boot ran on the lab unit and their outputs are recorded in
   `ppb_bad_status` and the 12-byte payload went uninterpreted. Fixing
   the check (with test adjudication) awaits explicit go-ahead;
   analysis: [F135_TOPOLOGY.md](F135_TOPOLOGY.md) § 5.
-  **Resolved in the working tree 2026-10-08 (not yet committed):**
-  `ppb::is_read_success(const Reply&)` added and applied at the scanner
-  READ sites (`read_module`, bridge-info, `read_fixed`) plus the client
-  warn gate; `is_success()` semantics untouched; five unit tests added
-  (READ `0x08`/`0x88` accepted, `0x88` event bit reported, invalid
-  flags rejected, ordinary statuses unchanged).
+  **Resolved and committed as `254e8a1`, verified on hardware
+  2026-10-08:** `ppb::is_read_success(const Reply&)` accepts READ flags
+  `(flags & 0x7F) == 0x08` (so `0x08` and `0x88`, event bit ignored for
+  success but still reported via `event_pending()`) and is applied at
+  the scanner READ sites (`read_module`, bridge-info, `read_fixed`)
+  plus the client warn gate; `is_success()` semantics untouched; five
+  unit tests added (READ `0x08`/`0x88` accepted, `0x88` event bit
+  reported, invalid flags rejected, ordinary statuses unchanged).
+  Live confirmation: `identify` now completes end-to-end.
 
-- Module-info (`0x07`, 12 bytes) payload semantics.
+- **Module-info (`0x07`, 12 bytes) payload semantics — lab unit
+  diverges from the corpus.** Both captured replies (unit 16402) share
+  the layout `0f/10 .. 00 00 '12345' 00 00` with a 5-byte ASCII id at
+  `[5..9]`; the lab unit (010-203-04) answers the byte-identical request
+  with `04 20 40 12 04 c0 21 02 00 00 92 00` (light) /
+  `02 20 00 a0 00 8c 08 00 00 20 00 00` (motor) — no printable run,
+  `[3..4]`/`[10..11]` non-zero. Open: what each byte means on this
+  firmware, and whether it matters that the OEM stack writes PICL/PICM
+  reg `0x03` = `01` immediately before each module-info read
+  (`base4.jsonl` events 147/155) while our sequence does not. The
+  decoder now shows only the capture-evidenced `[5..9]` window when it
+  is printable, else raw hex — it never fabricates strings.
 - HOST reg `0x03` bridge-info semantics (observed `0f 03`).
 - Whether reading `0x88` (temperature) is valid on F-135 (non-Plus).
 - Exact meaning of WRITE/CMD `data[1]` byte: "payload length" vs

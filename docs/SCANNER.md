@@ -48,9 +48,22 @@ does not fail the session. Any other error fails with state → `error`.
 3. **Module info** — READ reg `0x07`, 12 bytes, at light then motor
    controller (the init sequence's "module-info read from each controller"
    `[DOCUMENTED]`; register number `0x07` from captures). Payload is stored
-   raw; no semantic decoding is claimed (undocumented). Observed F-135+:
+   raw; beyond the window below no semantic decoding is claimed
+   (undocumented). The only capture-evidenced text is the 5-byte ASCII id
+   at offsets `[5..9]`, identical in both captured replies
+   (`base4.jsonl` events 151/159, unit 16402):
    `0f 0a 05 00 00 '12345' 00 00` (PICL+) / `10 06 05 00 00 '12345' 00 00`
-   (PICM+).
+   (PICM+). `ModuleInfo::printable()` returns exactly that window and only
+   when all five bytes are printable — otherwise no string is shown and
+   the CLI prints the raw hex. Scanning the whole payload for printable
+   bytes (the original heuristic) fabricated `module: @!` from the lab
+   unit's binary. **Lab unit 010-203-04 (identify, 2026-10-08) returns a
+   different, fully non-printable layout from the identical request:**
+   `04 20 40 12 04 c0 21 02 00 00 92 00` (PICL+) /
+   `02 20 00 a0 00 8c 08 00 00 20 00 00` (PICM+) — semantics `[UNKNOWN]`
+   (payload differs per unit/firmware; the OEM stack also writes PICL/
+   PICM reg `0x03` = `01` immediately before each module-info read
+   `base4.jsonl` events 147/155, which our sequence does not).
 4. **Bridge info** — READ HOST reg `0x03`, 2 bytes (capture-verified;
    observed `0f 03`; semantics unknown → shown as hex only).
 

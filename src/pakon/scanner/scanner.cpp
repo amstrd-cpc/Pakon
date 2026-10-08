@@ -32,11 +32,29 @@ std::string_view to_string(State state) {
 }
 
 std::string ModuleInfo::printable() const {
+    // Only the byte window that is ASCII in both captured payloads
+    // (offsets 5..9) counts as text. Anything else is structured binary
+    // in the captures (version/id fields) and must not be rendered as a
+    // string: the old whole-payload scan turned the lab unit's bytes
+    // 0x40/0x21 into a fabricated "module: @!".
     std::string out;
-    for (const auto b : raw) {
-        if (b >= 0x20 && b < 0x7F) {
-            out.push_back(static_cast<char>(b));
+    for (std::size_t i = 5; i <= 9; ++i) {
+        const auto b = raw[i];
+        if (b < 0x20 || b >= 0x7F) {
+            return {}; // not an ASCII id field on this unit
         }
+        out.push_back(static_cast<char>(b));
+    }
+    return out;
+}
+
+std::string ModuleInfo::hex() const {
+    std::string out;
+    for (std::size_t i = 0; i < raw.size(); ++i) {
+        if (i != 0) {
+            out.push_back(' ');
+        }
+        out += std::format("{:02x}", raw[i]);
     }
     return out;
 }

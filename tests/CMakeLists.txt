@@ -10,6 +10,13 @@ target_link_libraries(scanner_replay_test PRIVATE pakon_core)
 target_include_directories(scanner_replay_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME scanner_replay COMMAND scanner_replay_test)
 
+# Module-info decode: the capture-evidenced ASCII id window vs the lab
+# unit's non-printable payloads (pure display logic, no hardware).
+add_executable(scanner_module_info_test scanner/module_info_test.cpp)
+target_link_libraries(scanner_module_info_test PRIVATE pakon_core)
+target_include_directories(scanner_module_info_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME scanner_module_info COMMAND scanner_module_info_test)
+
 # Hardware-ID recognition + WinUSB INF consistency + WinUSB open-parameter
 # pins (pure string/value logic, no hardware, no Windows APIs).
 # PAKON_SOURCE_DIR lets the test read driver/PakonWinUSB.inf and pin its

@@ -452,19 +452,26 @@ int run_scanner_command(std::string_view command) {
         return 1;
     }
 
+    // Module-info id: only the capture-evidenced 5-byte ASCII window
+    // (offset 5..9) renders as text; otherwise show the raw payload so
+    // no string is ever fabricated from binary.
+    const auto module_text = [](const auto& module) -> std::string {
+        if (!module) {
+            return "n/a";
+        }
+        const auto id = module->printable();
+        return id.empty() ? module->hex() + " (raw)" : id;
+    };
+
     std::printf("Model: %s\n", pakon::scanner::to_string(identity->model).data());
     std::printf("Light controller: 0x%02x (%s), module: %s\n",
                 identity->addresses.light,
                 identity->light_present ? "present" : "absent",
-                identity->light_module
-                    ? identity->light_module->printable().c_str()
-                    : "n/a");
+                module_text(identity->light_module).c_str());
     std::printf("Motor controller: 0x%02x (%s), module: %s\n",
                 identity->addresses.motor,
                 identity->motor_present ? "present" : "absent",
-                identity->motor_module
-                    ? identity->motor_module->printable().c_str()
-                    : "n/a");
+                module_text(identity->motor_module).c_str());
     if (identity->bridge_info) {
         std::printf("Bridge info (HOST reg 0x03): %02x %02x\n",
                     (*identity->bridge_info)[0], (*identity->bridge_info)[1]);

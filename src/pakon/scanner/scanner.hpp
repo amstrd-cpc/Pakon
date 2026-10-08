@@ -56,14 +56,29 @@ enum class State {
 std::string_view to_string(State state);
 
 // 12-byte module-info read (READ reg 0x07). Semantic decoding is not
-// documented in pakon-reference; observed payloads are preserved raw:
+// documented in pakon-reference. Capture evidence (alibosworth/
+// pakon-captures, base4.jsonl events 151/159, F-135+ serial 16402):
 //   PICL+  0f 0a 05 00 00 '12345' 00 00
 //   PICM+  10 06 05 00 00 '12345' 00 00
+// bytes [5..9] hold the same 5-byte ASCII id in both captured payloads
+// and every other byte is non-textual in the captures. The lab unit
+// (010-203-04, 2026-10-08) returns an entirely different, non-printable
+// layout from the same request:
+//   PICL+  04 20 40 12 04 c0 21 02 00 00 92 00
+//   PICM+  02 20 00 a0 00 8c 08 00 00 20 00 00
+// so the semantics of every byte remain [UNKNOWN] beyond the capture-
+// evidenced ASCII window.
 struct ModuleInfo {
     std::array<std::uint8_t, 12> raw{};
 
-    // Any run of printable ASCII in the payload (for display only).
+    // The capture-evidenced 5-byte ASCII id at offset 5, returned only
+    // when all five bytes are printable; empty otherwise. Scanning the
+    // whole payload for printable bytes used to fabricate strings such
+    // as "@!" out of the lab unit's version/address bytes.
     std::string printable() const;
+
+    // Full payload as space-separated hex, e.g. "04 20 40 12 ... 92 00".
+    std::string hex() const;
 };
 
 struct Identity {
