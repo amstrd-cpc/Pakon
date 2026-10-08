@@ -52,8 +52,11 @@ src/pakon/
   usb/enumerate_win.cpp        SetupAPI: PnP device tree + device interfaces
                                (driver-independent — finds Code 28 devices)
   usb/win_usb_transport.cpp    WinUSB backend (Windows)
-  usb/win_usb_open.hpp         shared CreateFile parameters for both WinUSB
-                               open sites (overlapped; unit-tested — USB.md)
+  usb/win_usb_open.hpp         shared CreateFile parameters for every WinUSB
+                               open site (overlapped; unit-tested — USB.md)
+  usb/descriptors.hpp          read-only descriptor/topology scan API
+                               (descriptors_win.cpp: GET_DESCRIPTOR reads +
+                               WinUSB queries; stub elsewhere)
   usb/transport_stub.cpp       non-Windows stub (protocol tests still build)
   bootstrap/probe.hpp          stage-1 personality read constants + probe API
                                (evidence-pinned, read-only — BOOTSTRAP.md)
@@ -72,6 +75,7 @@ tests/                         self-contained harness (no test framework dep)
   bootstrap/probe_test.cpp     probe request pinning + one-read-only-I/O proof
 docs/                          this documentation set
   BOOTSTRAP.md                 cold→warm evidence status + probe procedure
+  F135_TOPOLOGY.md             read-only runtime descriptor/topology scan
   WINUSB_TEST.md               pending physical WinUSB binding test (procedure)
 ```
 

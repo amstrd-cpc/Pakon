@@ -27,6 +27,7 @@ Three rules shape everything here:
 | Build & tests | **4 CTest suites / 45 cases**, green on Linux/GCC (2026-10-07); MSVC Release target with `/W4 /permissive-`, same suite |
 | USB layer | Two-pass SetupAPI enumeration (finds even Code-28 units), WinUSB transport, one shared overlapped-open path — **cold and warm bindings both observed on hardware** |
 | Bootstrap probe | `pakon-cli probe` — exactly one read-only `0xA9` read — **hardware-validated**: cold ROM baseline `win32 121`, answers `C0-05-0F-35-F2-07-AA-04` once stage-1 runs |
+| Descriptor discovery | `pakon-cli descriptors` — raw device + configuration descriptors, full interface/endpoint topology, strings, WinUSB cross-check; standard `GET_DESCRIPTOR` only — hardware run pending, tables in [docs/F135_TOPOLOGY.md](docs/F135_TOPOLOGY.md) |
 | Cold→warm boot chain | **Validated on hardware 2026-10-07**: stage-1 upload → `0xA4` preamble → gated `0xA9` → Pakon7 download (709 × `0xA3` + 19 × `0xA0`) → final run → re-enumeration as `0F05:F135` — full evidence record in [docs/BOOT_CHAIN.md](docs/BOOT_CHAIN.md) |
 | C++ loader | **Designed, not yet written** — [docs/LOADER_DESIGN.md](docs/LOADER_DESIGN.md); the frozen PowerShell procedure ([tools/pakon_boot_reference.ps1](tools/pakon_boot_reference.ps1)) remains the trusted reference until each ported step is re-validated |
 | PPB + scanner session | Implemented and replay-verified against captures (198 425 frames; scripted transport fails on any off-script request); first PPB run on hardware pending |
@@ -61,6 +62,9 @@ pakon-cli [--log trace] <command>
 
   list       enumerate attached Pakon scanners (no I/O sent)
   attrib     PnP/driver attribution report (read-only property queries)
+  descriptors  read-only USB topology of the booted F135: device +
+             configuration descriptor bytes, every interface/endpoint,
+             strings (standard GET_DESCRIPTOR reads + WinUSB queries)
   probe      read-only bootstrap probe: one documented 0xA9 control read
   identify   open a PPB session and detect the scanner model
   status     identify + read-only status polls and register reads
@@ -125,6 +129,9 @@ Layering rules (who may call whom, and what each layer may emit) are in
    primary external spec maps into this repository, gap by gap.
 8. **[docs/WINUSB_TEST.md](docs/WINUSB_TEST.md)** — physical WinUSB
    binding procedure and its evidence table.
+9. **[docs/F135_TOPOLOGY.md](docs/F135_TOPOLOGY.md)** — the read-only
+   descriptor/topology scan of the booted runtime: method, safety
+   envelope, observation record.
 
 ## Hardware record (lab unit)
 
@@ -135,8 +142,8 @@ Layering rules (who may call whom, and what each layer may emit) are in
 | Stage-1 upload → `0xA9` | answered `C0-05-0F-35-F2-07-AA-04` | docs/BOOT_CHAIN.md § 5 |
 | **Full boot, 2026-10-07** | all 11 steps OK → `USB\VID_0F05&PID_F135\010-203-04`, `status=OK`, `service=WINUSB` | docs/BOOT_CHAIN.md § 3 |
 
-Not yet run on hardware: the CLI's `list`/`attrib`/`identify`/`status`
-against the live unit, and any PPB traffic.
+Not yet run on hardware: the CLI's `list`/`identify`/`status` and the new
+`descriptors` topology scan, and any PPB traffic.
 
 ## External references
 

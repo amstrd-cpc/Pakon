@@ -2,8 +2,8 @@
 
 // Shared CreateFile parameters for opening the WinUSB device interface.
 //
-// Why this exists: the project has TWO WinUSB open sites and they
-// drifted apart — the exact bug class this header prevents:
+// Why this exists: the project originally had TWO WinUSB open sites and
+// they drifted apart — the exact bug class this header prevents:
 //
 //   * enumerate_win.cpp / enrich_interfaces (what `list` reads interface
 //     detail with) was fixed on hardware to open FILE_FLAG_OVERLAPPED;
@@ -20,12 +20,14 @@
 // requires an overlapped file object; Microsoft's WinUSB samples always
 // specify FILE_FLAG_OVERLAPPED for this reason.
 //
-// Both call sites must build their CreateFile from kWinUsbOpenParams:
+// All open sites must build their CreateFile from kWinUsbOpenParams —
+// currently: win_usb_transport.cpp, enumerate_win.cpp, and
+// descriptors_win.cpp (the read-only descriptor scan):
 //   - static_asserts in win_usb_transport.cpp pin the values to the real
 //     Windows macros (compile-time, Windows builds);
 //   - tests/usb/identity_test.cpp pins the values on any host AND reads
-//     both source files to fail if either site stops using this header
-//     or reintroduces its own (non-overlapped) attributes.
+//     the first two sites' source files to fail if either stops using
+//     this header or reintroduces its own (non-overlapped) attributes.
 
 namespace pakon::usb {
 

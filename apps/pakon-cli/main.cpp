@@ -1,9 +1,12 @@
 // pakon-cli — command-line diagnostics for the Pakon F-X35 scanner stack.
 //
-// Commands (Phase 1-4 scope + bootstrap probe):
+// Commands (Phase 1-4 scope + bootstrap probe + diagnostics):
 //   list                 enumerate attached Pakon scanners (no I/O sent)
 //   attrib               read-only PnP/driver attribution report
 //                        (property queries only - no device I/O)
+//   descriptors          read-only USB descriptor/topology discovery for
+//                        the booted F135 (standard GET_DESCRIPTOR reads +
+//                        WinUSB interface queries; no vendor requests)
 //   probe                cold-device read-only bootstrap probe: one
 //                        documented vendor control read (stage-1
 //                        personality), no bulk traffic, no writes
@@ -14,13 +17,16 @@
 //   --log <level>        off|error|warn|info|debug|trace (default info;
 //                        use trace for full packet hex dumps)
 
+#include <cstddef>
 #include <cstdio>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "pakon/bootstrap/probe.hpp"
 #include "pakon/logging/logger.hpp"
 #include "pakon/scanner/scanner.hpp"
+#include "pakon/usb/descriptors.hpp"
 #include "pakon/usb/driver_attrib.hpp"
 #include "pakon/usb/transport.hpp"
 
@@ -46,6 +52,12 @@ void print_usage() {
         "             (read-only property queries: hardware/compatible IDs,\n"
         "             service, class + class GUID, descriptions, bound INF;\n"
         "             no device is opened, no USB traffic is sent)\n"
+        "  descriptors report the booted F135's full USB topology\n"
+        "             (device + configuration descriptor bytes, every\n"
+        "             interface/alt setting/endpoint, referenced strings;\n"
+        "             standard GET_DESCRIPTOR reads + WinUSB queries only —\n"
+        "             no vendor request, no reset, no reconfiguration;\n"
+        "             see docs/F135_TOPOLOGY.md)\n"
         "  probe      read-only bootstrap probe: stage-1 personality read\n"
         "             (works on cold devices; the only I/O it sends is one\n"
         "             documented vendor control read — see docs/BOOTSTRAP.md)\n"
@@ -187,6 +199,184 @@ int cmd_attrib() {
         std::puts("");
     }
     std::puts("(Read-only PnP query: no device opened, no USB traffic sent.)");
+    return 0;
+}
+
+// bmAttributes low bits → transfer type name (USB spec encoding).
+const char* transfer_name(std::uint8_t attributes) {
+    const std::uint8_t type = attributes & 0x03;
+    return type == 0 ? "control"
+         : type == 1 ? "isochronous"
+         : type == 2 ? "bulk"
+                     : "interrupt";
+}
+
+void print_hex_bytes(const std::vector<std::uint8_t>& bytes) {
+    for (std::size_t offset = 0; offset < bytes.size(); offset += 16) {
+        std::printf("    %04zx:", offset);
+        for (std::size_t i = offset; i < bytes.size() && i < offset + 16;
+             ++i) {
+            std::printf(" %02x", bytes[i]);
+        }
+        std::puts("");
+    }
+}
+
+// One topology section: every interface → alternate setting → endpoint
+// with direction, transfer type, packet size (raw + low 11 bits) and
+// raw bInterval (the encoding differs per transfer type and is not
+// decoded here — raw bytes only, per the project's no-invention rule).
+void print_topology(const std::vector<pakon::usb::DescriptorInterface>& interfaces,
+                    const char* title) {
+    std::puts(title);
+    if (interfaces.empty()) {
+        std::puts("  (none reported)");
+        return;
+    }
+    for (const auto& iface : interfaces) {
+        for (const auto& alt : iface.alt_settings) {
+            std::printf(
+                "  interface %u alt %u: class %02x subclass %02x "
+                "protocol %02x  iInterface %u  endpoints %zu\n",
+                alt.interface_number, alt.alternate_setting, alt.class_code,
+                alt.subclass_code, alt.protocol_code, alt.string_index,
+                alt.endpoints.size());
+            for (const auto& endpoint : alt.endpoints) {
+                std::printf(
+                    "    EP 0x%02x %-3s %-11s wMaxPacket 0x%04x (%u)  "
+                    "bInterval %u\n",
+                    endpoint.address,
+                    (endpoint.address & 0x80) ? "IN" : "OUT",
+                    transfer_name(endpoint.attributes), endpoint.w_max_packet,
+                    endpoint.w_max_packet & 0x07FFu, endpoint.interval);
+            }
+        }
+    }
+}
+
+// Read-only F135 descriptor/topology discovery (docs/F135_TOPOLOGY.md).
+// Standard GET_DESCRIPTOR reads (device/configuration/string) plus local
+// WinUSB queries only: no vendor control request (0xA0/0xA3/0xA4/0xA9
+// never touched), no firmware upload, no USB reset, no configuration
+// change — the device is left exactly as found.
+int cmd_descriptors() {
+    if (!pakon::usb::descriptor_scan_supported()) {
+        std::fprintf(stderr,
+                     "error: descriptor discovery requires Windows "
+                     "(WinUSB descriptor queries); "
+                     "see docs/F135_TOPOLOGY.md\n");
+        return 1;
+    }
+
+    const auto report = pakon::usb::scan_pakon_descriptors();
+    if (!report.error.empty()) {
+        std::fprintf(stderr, "error: %s\n", report.error.c_str());
+        return 1;
+    }
+
+    std::puts("Read-only USB descriptor discovery (booted 0F05:F135 runtime)");
+    std::puts("Traffic: standard GET_DESCRIPTOR (device/configuration/string)");
+    std::puts("        + local WinUSB descriptor queries. No vendor request");
+    std::puts("        (0xA0/0xA3/0xA4/0xA9 untouched), no firmware upload,");
+    std::puts("        no reset, no configuration change.");
+    std::puts("");
+    std::puts("Device");
+    std::printf("  instance:       %s\n", report.instance_id.c_str());
+    std::printf("  hardware id:    %s\n", report.hardware_id.c_str());
+    std::printf("  interface path: %s\n", report.device_path.c_str());
+    std::printf("  open:           %s\n", report.open_mode.c_str());
+    if (report.link_speed_known) {
+        std::printf("  link speed:     %s\n", report.link_speed.c_str());
+    }
+    std::puts("  configuration:  active (implied — WinUsb_Initialize "
+              "succeeded;\n                  the WinUSB API exposes no "
+              "bConfigurationValue read)");
+    std::puts("");
+
+    if (report.device_descriptor_read) {
+        std::puts("DEVICE DESCRIPTOR (18 bytes, GET_DESCRIPTOR(DEVICE))");
+        std::printf("  bcdUSB %04x  class %02x/%02x/%02x  bMaxPacketSize0 %u\n",
+                    report.bcd_usb, report.device_class,
+                    report.device_sub_class, report.device_protocol,
+                    report.b_max_packet_size0);
+        std::printf("  idVendor %04x  idProduct %04x  bcdDevice %04x\n",
+                    report.id_vendor, report.id_product, report.bcd_device);
+        std::printf("  iManufacturer %u  iProduct %u  iSerialNumber %u  "
+                    "bNumConfigurations %u\n",
+                    report.i_manufacturer, report.i_product, report.i_serial,
+                    report.b_num_configurations);
+        std::puts("  raw:");
+        print_hex_bytes(report.device_descriptor);
+    } else {
+        std::printf("DEVICE DESCRIPTOR: unavailable (%s)\n",
+                    report.device_descriptor_error.c_str());
+    }
+    std::puts("");
+
+    if (report.config_descriptor_read) {
+        std::printf(
+            "CONFIGURATION DESCRIPTOR (%zu bytes, "
+            "GET_DESCRIPTOR(CONFIGURATION))\n",
+            report.config_descriptor.size());
+        const unsigned power_unit =
+            report.device_descriptor_read && report.bcd_usb >= 0x0300 ? 8u
+                                                                      : 2u;
+        std::printf("  bNumInterfaces %u  bConfigurationValue %u  "
+                    "iConfiguration %u\n",
+                    report.b_num_interfaces, report.b_configuration_value,
+                    report.i_configuration);
+        std::printf("  bmAttributes 0x%02x  bMaxPower %u (= %u mA at %u mA "
+                    "units)\n",
+                    report.bm_attributes, report.max_power,
+                    report.max_power * power_unit, power_unit);
+        if (report.b_num_configurations > 1) {
+            std::puts("  note: bNumConfigurations > 1 — only configuration 0");
+            std::puts("        was read; selecting another configuration would");
+            std::puts("        reconfigure the device and is NOT done here.");
+        }
+        if (!report.config_parse_error.empty()) {
+            std::printf("  parse: first anomaly — %s\n",
+                        report.config_parse_error.c_str());
+        }
+        std::puts("  raw:");
+        print_hex_bytes(report.config_descriptor);
+    } else {
+        std::printf("CONFIGURATION DESCRIPTOR: unavailable (%s)\n",
+                    report.config_descriptor_error.c_str());
+    }
+    std::puts("");
+
+    print_topology(report.interfaces,
+                   "INTERFACES (parsed from the raw configuration "
+                   "descriptor)");
+    std::puts("");
+    print_topology(report.winusb_interfaces,
+                   "INTERFACES (WinUSB query: QueryInterfaceSettings / "
+                   "QueryPipe — cross-check)");
+    if (!report.winusb_walk_error.empty()) {
+        std::printf("  walk note: %s\n", report.winusb_walk_error.c_str());
+    }
+    std::puts("");
+
+    std::puts("STRING DESCRIPTORS (GET_DESCRIPTOR(STRING), referenced "
+              "indices only)");
+    if (report.strings.empty()) {
+        std::puts("  (no string indices referenced)");
+    }
+    for (const auto& entry : report.strings) {
+        if (entry.read) {
+            std::printf("  index %u (lang 0x%04x): \"%s\"\n", entry.index,
+                        entry.language_id, entry.text.c_str());
+        } else {
+            std::printf("  index %u: unavailable (%s)\n", entry.index,
+                        entry.error.c_str());
+        }
+    }
+    std::puts("");
+    std::puts("(Read-only: standard descriptor reads + WinUSB queries only —");
+    std::puts(" no vendor control request, no firmware upload, no USB reset,");
+    std::puts(" no configuration change; the device was left as found.)");
+    std::puts("Interpretation and evidence labels: docs/F135_TOPOLOGY.md");
     return 0;
 }
 
@@ -355,6 +545,9 @@ int main(int argc, char** argv) {
     }
     if (command == "attrib") {
         return cmd_attrib();
+    }
+    if (command == "descriptors") {
+        return cmd_descriptors();
     }
     if (command == "probe") {
         return cmd_probe();

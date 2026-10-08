@@ -1,10 +1,12 @@
 # Status
 
-Last updated: 2026-10-07. Scope: Phase 1–4 first deliverable (structure, USB
+Last updated: 2026-10-08. Scope: Phase 1–4 first deliverable (structure, USB
 detection, PPB infrastructure, safe identify/status comms, tests, CLI, docs)
-plus the bootstrap evidence survey, the read-only probe, and the
+plus the bootstrap evidence survey, the read-only probe, the
 **validated cold→warm boot chain** ([BOOT_CHAIN.md](BOOT_CHAIN.md)) with its
-loader-port design ([LOADER_DESIGN.md](LOADER_DESIGN.md)).
+loader-port design ([LOADER_DESIGN.md](LOADER_DESIGN.md)), and the
+read-only descriptor/topology diagnostic
+([F135_TOPOLOGY.md](F135_TOPOLOGY.md)).
 
 Legend for evidence: **[COMPLETED]** verified by build/test evidence in this
 repository · **[HARDWARE-VALIDATED]** executed and recorded on the lab unit
@@ -25,6 +27,19 @@ not yet run against real hardware.
   `service=WINUSB`. Every write volatile (unplug = cold); probe unchanged.
   Frozen procedure: `tools/pakon_boot_reference.ps1`. Remaining UNKNOWNs
   listed in BOOT_CHAIN.md § 8.
+- **Read-only F135 descriptor/topology diagnostic (implementation
+  complete, hardware run pending)** — `pakon-cli descriptors` +
+  `src/pakon/usb/descriptors.*`: locates the booted `0F05:F135`, reads
+  the raw device + configuration descriptor bytes and referenced strings
+  via **standard `GET_DESCRIPTOR` only**, walks every interface /
+  alternate setting / endpoint (direction, transfer type, max packet,
+  interval, class/subclass/protocol), cross-checks against an
+  independent WinUSB `QueryInterfaceSettings`/`QueryPipe` walk, and
+  reports the WinUSB interface path, link speed and current
+  configuration. No vendor request (`0xA0`/`0xA3`/`0xA4`/`0xA9`
+  untouched), no firmware upload, no reset, no reconfiguration, no bulk
+  traffic. Observation tables in
+  [F135_TOPOLOGY.md](F135_TOPOLOGY.md) await the lab run.
 - **Reference analysis** — `docs/PAKON_REFERENCE.md`: what pakon-reference
   provides, what translates directly, gaps/limitations, file-by-file
   citations. pakon-reference is treated as primary spec throughout.
@@ -75,8 +90,10 @@ not yet run against real hardware.
   a cold device for that single read and nothing else (no bulk, no
   control writes, no PPB/type-byte-0 exposure).
 - **Tests** — 45 cases: **45/45 passing on Linux/GCC (CTest 4/4,
-  2026-10-07)**; the native MSVC build previously passed 3/3 and must be
-  re-run for the new suites (build + test command: `docs/BOOTSTRAP.md` § 6).
+  2026-10-07)**; the MSVC Release re-run of the same 4 suites / 45 cases
+  was **reported green (operator, 2026-10-08)** together with the
+  `attrib` run — re-run after each landing change
+  (command: `docs/BOOTSTRAP.md` § 6).
   All vectors verbatim from pakon-reference quotes and
   the `alibosworth/pakon-captures` corpus (F-135+ serial 16402); replay
   transport fails on any request not in the scripted captures. The
@@ -153,7 +170,8 @@ full cold→warm boot ran on the lab unit and their outputs are recorded in
    — the *bindings themselves* are now observed: cold `0f05:f235` opened
    over WinUSB with interface GUID `{0e9e6f29…}` from the first probe
    session, and the post-boot `0f05:f135&REV_0002` enumerated with
-   `service=WINUSB` (attribution query pending, BOOT_CHAIN.md § 6). The
+   `service=WINUSB` (attribution query run reported green 2026-10-08;
+   BOOT_CHAIN.md § 6 rows await transcription from its output). The
    `identify`/`status`-refuse-cold checks and the SET_CONFIGURATION-at-bind
    risk adjudication still need their run.
 3. The full connect handshake on a real unit, including the first-open vs
@@ -171,6 +189,11 @@ full cold→warm boot ran on the lab unit and their outputs are recorded in
    upload the same read answered `C0-05-0F-35-F2-07-AA-04`, and the full
    boot transcript follows (`BOOT_CHAIN.md` § 3, § 5). A C++-path probe
    run against hardware (via the MSVC build) is still worth repeating.
+8. `pakon-cli descriptors` against the booted F135 — fills the
+   `[PENDING]` observation tables in
+   [F135_TOPOLOGY.md](F135_TOPOLOGY.md) (method and safety sections
+   already committed; standard `GET_DESCRIPTOR` reads + WinUSB queries
+   only).
 
 ## UNKNOWN / NEEDS INVESTIGATION
 
