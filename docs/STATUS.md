@@ -39,7 +39,9 @@ not yet run against real hardware.
   configuration. No vendor request (`0xA0`/`0xA3`/`0xA4`/`0xA9`
   untouched), no firmware upload, no reset, no reconfiguration, no bulk
   traffic. Observation tables in
-  [F135_TOPOLOGY.md](F135_TOPOLOGY.md) await the lab run.
+  [F135_TOPOLOGY.md](F135_TOPOLOGY.md) **filled from the 2026-10-08
+  lab run** (raw descriptors, two agreeing topology views, strings,
+  speed; live device descriptor byte-identical to the Pakon7 image).
 - **Reference analysis** — `docs/PAKON_REFERENCE.md`: what pakon-reference
   provides, what translates directly, gaps/limitations, file-by-file
   citations. pakon-reference is treated as primary spec throughout.
@@ -78,8 +80,9 @@ not yet run against real hardware.
   (HOST/light/motor polls + `0x83`/`0x84`/`0x88` reads), explicit
   `State`/`Model` enums with logged transitions.
 - **pakon-cli** — `list` (enumeration only), `probe` (cold-device read-only
-  bootstrap probe: one documented vendor control read), `identify`,
-  `status`, `--log LEVEL`.
+  bootstrap probe: one documented vendor control read), `attrib`
+  (read-only PnP/driver attribution), `descriptors` (read-only USB
+  descriptor/topology scan), `identify`, `status`, `--log LEVEL`.
 - **Bootstrap evidence survey + read-only probe** — `docs/BOOTSTRAP.md`
   records how far repo evidence reaches for the cold→warm firmware path:
   the FX2 sequence is documented **by name only** and the firmware bytes
@@ -174,14 +177,24 @@ full cold→warm boot ran on the lab unit and their outputs are recorded in
    BOOT_CHAIN.md § 6 rows await transcription from its output). The
    `identify`/`status`-refuse-cold checks and the SET_CONFIGURATION-at-bind
    risk adjudication still need their run.
-3. The full connect handshake on a real unit, including the first-open vs
-   later-open reply behavior.
-4. Presence probes `0x44`/`0x24` on a real F-135+ (and an F-135, if
-   available) — model detection evidence so far comes from pakon-reference
-   and third-party projects, not from this code.
+3. ~~The full connect handshake on a real unit~~ — **recorded
+   2026-10-08 (first open of the booted F135 by `identify`):**
+   `04 03 10 00 85` → `07 02 10 00`, `02 04 10 01 8f 00` →
+   `07 02 10 00`, `state connecting -> ready`. Later-open reply
+   behavior not separately recorded.
+4. ~~Presence probes `0x44`/`0x24` on a real F-135+~~ — **recorded
+   2026-10-08:** `0x44` → status `00` (present), `0x24` → status `01`
+   (absent) = exactly the F-135+ answer pattern documented in
+   `scanner.cpp`. Full model determination did **not** complete (item 5);
+   an F-135 (inverted pattern) still untested.
 5. Module-info / bridge-info / status register reads (`0x83`, `0x84`,
    `0x88`) — replies are capture-verified but were captured from another
    stack; our frames must be confirmed to elicit them.
+   **First module-info read on hardware (2026-10-08): the device
+   answered a well-formed 12-byte reply** (`01 0e 40 88` + payload —
+   count = 2 + 12, address echoed), but `is_success` rejected its
+   documented READ flags byte `0x88` (see UNKNOWN) and `identify`
+   stopped; bridge/status reads still unrun.
 6. Any claim that the driver-stack coexists with the running legacy
    software — assumed only, untested.
 7. ~~`pakon-cli probe` against the cold unit~~ — **recorded 2026-10-07:**
@@ -189,13 +202,24 @@ full cold→warm boot ran on the lab unit and their outputs are recorded in
    upload the same read answered `C0-05-0F-35-F2-07-AA-04`, and the full
    boot transcript follows (`BOOT_CHAIN.md` § 3, § 5). A C++-path probe
    run against hardware (via the MSVC build) is still worth repeating.
-8. `pakon-cli descriptors` against the booted F135 — fills the
-   `[PENDING]` observation tables in
-   [F135_TOPOLOGY.md](F135_TOPOLOGY.md) (method and safety sections
-   already committed; standard `GET_DESCRIPTOR` reads + WinUSB queries
-   only).
+8. ~~`pakon-cli descriptors` against the booted F135~~ — **recorded
+   2026-10-08:** full output in
+   [F135_TOPOLOGY.md](F135_TOPOLOGY.md) (raw device + configuration
+   descriptors, both topology views agreeing, strings incl. serial,
+   link speed high-or-above; live device descriptor **byte-identical**
+   to the Pakon7 image @ `0x1000`).
 
 ## UNKNOWN / NEEDS INVESTIGATION
+
+- **READ event-flag handling gap in `is_success`** (found on hardware
+  2026-10-08): the device's well-formed module-info reply carried READ
+  flags `0x88 = 0x08 | 0x80` (event pending) — documented in
+  `ppb/packet.hpp` / `docs/PPB.md` / `docs/PAKON_REFERENCE.md`, capture
+  ratio 2657:1, pinned by `parse_read_reply_event_flag` — but
+  `is_success` accepts only `0x00`/`0x08`, so `identify` stopped with
+  `ppb_bad_status` and the 12-byte payload went uninterpreted. Fixing
+  the check (with test adjudication) awaits explicit go-ahead;
+  analysis: [F135_TOPOLOGY.md](F135_TOPOLOGY.md) § 5.
 
 - Module-info (`0x07`, 12 bytes) payload semantics.
 - HOST reg `0x03` bridge-info semantics (observed `0f 03`).

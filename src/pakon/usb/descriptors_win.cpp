@@ -495,12 +495,15 @@ DescriptorScan scan_pakon_descriptors() {
         UCHAR speed = 0;
         if (WinUsb_QueryDeviceInformation(usb, DEVICE_SPEED, &length,
                                           &speed)) {
+            // WinUSB's DEVICE_SPEED encoding is NOT the USB_DEVICE_SPEED
+            // enum: per Microsoft's WinUsb_QueryDeviceInformation docs,
+            // 0x01 = low/full speed, 0x03 = high speed or above (the
+            // lab unit returned 0x03 — matches its 512-byte bulk
+            // endpoints and bcdUSB 0200).
             report.link_speed_known = true;
-            report.link_speed = speed == 0 ? "low"
-                               : speed == 1 ? "full"
-                               : speed == 2 ? "high"
-                                            : "unknown(" +
-                                                  std::to_string(speed) + ")";
+            report.link_speed = speed == 1 ? "low or full (code 0x01)"
+                               : speed == 3 ? "high or above (code 0x03)"
+                                            : "code 0x" + hex_byte(speed);
         }
     }
 

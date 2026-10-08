@@ -27,10 +27,10 @@ Three rules shape everything here:
 | Build & tests | **4 CTest suites / 45 cases**, green on Linux/GCC (2026-10-07); MSVC Release target with `/W4 /permissive-`, same suite |
 | USB layer | Two-pass SetupAPI enumeration (finds even Code-28 units), WinUSB transport, one shared overlapped-open path — **cold and warm bindings both observed on hardware** |
 | Bootstrap probe | `pakon-cli probe` — exactly one read-only `0xA9` read — **hardware-validated**: cold ROM baseline `win32 121`, answers `C0-05-0F-35-F2-07-AA-04` once stage-1 runs |
-| Descriptor discovery | `pakon-cli descriptors` — raw device + configuration descriptors, full interface/endpoint topology, strings, WinUSB cross-check; standard `GET_DESCRIPTOR` only — hardware run pending, tables in [docs/F135_TOPOLOGY.md](docs/F135_TOPOLOGY.md) |
+| Descriptor discovery | `pakon-cli descriptors` — raw device + configuration descriptors, full interface/endpoint topology, strings, WinUSB cross-check; standard `GET_DESCRIPTOR` only — **recorded on hardware 2026-10-08** (live device descriptor byte-identical to the Pakon7 image) in [docs/F135_TOPOLOGY.md](docs/F135_TOPOLOGY.md) |
 | Cold→warm boot chain | **Validated on hardware 2026-10-07**: stage-1 upload → `0xA4` preamble → gated `0xA9` → Pakon7 download (709 × `0xA3` + 19 × `0xA0`) → final run → re-enumeration as `0F05:F135` — full evidence record in [docs/BOOT_CHAIN.md](docs/BOOT_CHAIN.md) |
 | C++ loader | **Designed, not yet written** — [docs/LOADER_DESIGN.md](docs/LOADER_DESIGN.md); the frozen PowerShell procedure ([tools/pakon_boot_reference.ps1](tools/pakon_boot_reference.ps1)) remains the trusted reference until each ported step is re-validated |
-| PPB + scanner session | Implemented and replay-verified against captures (198 425 frames; scripted transport fails on any off-script request); first PPB run on hardware pending |
+| PPB + scanner session | Implemented and replay-verified against captures (198 425 frames; scripted transport fails on any off-script request); **first on-hardware PPB exchange 2026-10-08**: connect handshake + presence probes OK, module-info reply well-formed but its documented `0x88` READ-flags byte hit a handling gap in `is_success` ([docs/STATUS.md](docs/STATUS.md)) |
 | Phases 5–10 (init/scan/teardown, film transport, imaging, decode, calibration read, output) | Not implemented yet |
 | Driver package | [driver/PakonWinUSB.inf](driver/PakonWinUSB.inf) — in-box `winusb.sys`, both device identities, interface GUID `{0e9e6f29-…}`; [driver/README.md](driver/README.md) |
 
@@ -90,7 +90,7 @@ prints full TX/RX packet hex dumps.
 ## Repository map
 
 ```
-apps/pakon-cli/       CLI: list / attrib / probe / identify / status
+apps/pakon-cli/       CLI: list / attrib / probe / descriptors / identify / status
 src/pakon/
   usb/                IUsbTransport, SetupAPI enumeration, WinUSB
                       backend, identity rules, driver attribution
@@ -141,9 +141,12 @@ Layering rules (who may call whom, and what each layer may emit) are in
 | Cold `0xA9` baseline | `win32 121` — boot ROM silent (expected) | docs/BOOT_CHAIN.md § 5 |
 | Stage-1 upload → `0xA9` | answered `C0-05-0F-35-F2-07-AA-04` | docs/BOOT_CHAIN.md § 5 |
 | **Full boot, 2026-10-07** | all 11 steps OK → `USB\VID_0F05&PID_F135\010-203-04`, `status=OK`, `service=WINUSB` | docs/BOOT_CHAIN.md § 3 |
+| **Descriptor scan, 2026-10-08** | `descriptors` — device descriptor byte-identical to the Pakon7 image @ `0x1000`; 1 vendor interface, bulk `0x01`/`0x81`/`0x86` @ 512; strings incl. serial `010-203-04`; interface path carries this repo's GUID | docs/F135_TOPOLOGY.md |
+| **First PPB session, 2026-10-08** | `identify` — connect handshake + probes `0x44`/`0x24` answered; module-info reply well-formed (12 B) but `0x88` READ-flags byte rejected by `is_success` → stopped (payload uninterpreted) | docs/STATUS.md |
 
-Not yet run on hardware: the CLI's `list`/`identify`/`status` and the new
-`descriptors` topology scan, and any PPB traffic.
+Not yet run on hardware: the CLI's `list` and `status` commands. (`attrib`,
+`descriptors` and `identify` ran 2026-10-08 — see
+[docs/STATUS.md](docs/STATUS.md) and [docs/F135_TOPOLOGY.md](docs/F135_TOPOLOGY.md).)
 
 ## External references
 

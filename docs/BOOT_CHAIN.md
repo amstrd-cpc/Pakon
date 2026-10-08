@@ -161,12 +161,21 @@ Attribution:
   `winusb.sys` (`service=WINUSB`, class `USBDevice`) and registers
   interface GUID `{0e9e6f29-e70a-4582-8d02-bde3ad701252}` — the same GUID
   the lab machine's cold device has exposed since the first probe session.
-- Confirmation is one read-only query away: `pakon-cli attrib` (no device
-  open, no USB traffic) reports service, class + class GUID, hardware and
-  compatible IDs, `DeviceDesc`, `FriendlyName`, `BusReportedDeviceDesc`
-  and the driver INF/provider.
-- `FriendlyName` / `DeviceDesc`: **[PENDING]** — the boot transcript did
-  not capture them; the attribution query fills these rows.
+- **[PROVEN] (2026-10-08, descriptor scan):** the booted device's
+  WinUSB interface path is
+  `\\?\usb#vid_0f05&pid_f135#010-203-04#{0e9e6f29-e70a-4582-8d02-bde3ad701252}` —
+  it carries exactly the GUID `identity_test` pins byte-identical to
+  `driver/PakonWinUSB.inf`, so the binding INF declared *this repo's*
+  `DeviceInterfaceGUIDs` value. The `[INFERRED]` binder above is thereby
+  upgraded to `[PROVEN]` by the path+GUID chain
+  ([F135_TOPOLOGY.md](F135_TOPOLOGY.md) § 3.1).
+- The remaining attribution queries (`pakon-cli attrib` — no device open,
+  no USB traffic) reported green by the operator (2026-10-08) but **not
+  yet transcribed**: service, class + class GUID, hardware and
+  compatible IDs, driver INF/provider.
+- `FriendlyName` / `DeviceDesc`: **[PENDING]** — neither the boot
+  transcript nor a pasted `attrib` output has captured them; the
+  transcription fills these rows.
 
 If the inference holds, the boot milestone simultaneously validates the
 repo's WinUSB package decision: the warm device bound through the exact
