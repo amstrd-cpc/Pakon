@@ -243,7 +243,7 @@ full cold→warm boot ran on the lab unit and their outputs are recorded in
   `[3..4]`/`[10..11]` non-zero. Open: what each byte means on this
   firmware, and whether it matters that the OEM stack writes PICL/PICM
   reg `0x03` = `01` immediately before each module-info read
-  (`base4.jsonl` events 147/155) while our sequence does not. The
+  (`base4.jsonl` events 145/154) while our sequence does not. The
   decoder now shows only the capture-evidenced `[5..9]` window when it
   is printable, else raw hex — it never fabricates strings.
 - HOST reg `0x03` bridge-info semantics (observed `0f 03`).

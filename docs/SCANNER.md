@@ -63,7 +63,7 @@ does not fail the session. Any other error fails with state → `error`.
    `02 20 00 a0 00 8c 08 00 00 20 00 00` (PICM+) — semantics `[UNKNOWN]`
    (payload differs per unit/firmware; the OEM stack also writes PICL/
    PICM reg `0x03` = `01` immediately before each module-info read
-   `base4.jsonl` events 147/155, which our sequence does not).
+   `base4.jsonl` events 145/154, which our sequence does not).
 4. **Bridge info** — READ HOST reg `0x03`, 2 bytes (capture-verified;
    observed `0f 03`; semantics unknown → shown as hex only).
 
