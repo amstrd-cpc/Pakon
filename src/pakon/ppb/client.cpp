@@ -76,7 +76,13 @@ Result<Reply> Client::exchange(const Frame& request) {
                         reply->address, request.data.front()));
     }
 
-    if (!is_success(reply->status) && reply->status != Status::not_acknowledged) {
+    // READ replies carry flags, not an ordinary status: 0x08/0x88 are
+    // documented successes and must not be warned about. ACK/poll
+    // replies keep the original rule unchanged.
+    const bool ok = reply->type == FrameType::read
+                        ? is_read_success(*reply)
+                        : is_success(reply->status);
+    if (!ok && reply->status != Status::not_acknowledged) {
         // not_acknowledged is a meaningful, expected answer to presence
         // probes (absent controller); everything else non-success is
         // surfaced with context.

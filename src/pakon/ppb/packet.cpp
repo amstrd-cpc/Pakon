@@ -36,6 +36,19 @@ bool is_success(Status status) {
     return status == Status::ok || status == Status::success_alt;
 }
 
+bool is_read_success(const Reply& reply) {
+    if (reply.type != FrameType::read) {
+        return false;
+    }
+    // Valid READ flags: 0x08 ordinary, 0x88 = 0x08 | 0x80 event pending
+    // (docs/PPB.md; observed 2657:1 in the capture corpus). The 0x80
+    // bit is ignored for success and reported separately by
+    // Reply::event_pending(); everything else — including 0x00 — is not
+    // a documented READ flags byte and stays rejected.
+    const auto flags = static_cast<std::uint8_t>(reply.status);
+    return (flags & 0x7F) == 0x08;
+}
+
 Result<std::vector<std::uint8_t>> Frame::serialize() const {
     if (data.empty()) {
         return failure<std::vector<std::uint8_t>>(

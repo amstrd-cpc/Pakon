@@ -220,6 +220,12 @@ full cold→warm boot ran on the lab unit and their outputs are recorded in
   `ppb_bad_status` and the 12-byte payload went uninterpreted. Fixing
   the check (with test adjudication) awaits explicit go-ahead;
   analysis: [F135_TOPOLOGY.md](F135_TOPOLOGY.md) § 5.
+  **Resolved in the working tree 2026-10-08 (not yet committed):**
+  `ppb::is_read_success(const Reply&)` added and applied at the scanner
+  READ sites (`read_module`, bridge-info, `read_fixed`) plus the client
+  warn gate; `is_success()` semantics untouched; five unit tests added
+  (READ `0x08`/`0x88` accepted, `0x88` event bit reported, invalid
+  flags rejected, ordinary statuses unchanged).
 
 - Module-info (`0x07`, 12 bytes) payload semantics.
 - HOST reg `0x03` bridge-info semantics (observed `0f 03`).

@@ -69,7 +69,11 @@ cannot hold it) and `Frame::parse()` rejects it from the wire.
 `0x00` ok · `0x01` not acked (also: controller absent) · `0x02` invalid packet
 · `0x03` bad checksum · `0x04–0x06` USB errors · `0x07` host-algorithm error ·
 `0x08` "also reported as success" · `0x09` bus error `[DOCUMENTED]`.
-`is_success()` treats `0x00` and `0x08` as success.
+`is_success()` treats `0x00` and `0x08` as success. READ replies are checked
+with `is_read_success(Reply)` instead: flags `0x08` and `0x88` accepted
+(the `0x80` event bit ignored for success, still reported by
+`event_pending()`), every other flags byte rejected, non-READ replies
+declined — ordinary status handling stays `is_success()`.
 
 ## Session client (`ppb::Client`)
 

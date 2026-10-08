@@ -77,7 +77,8 @@ const char* to_string(Status status);
 // Statuses that may be treated as success. Note 0x08: for ACK/POLL replies
 // the reference says it is "also reported as success in some sequences";
 // for READ replies it is the ordinary value of the status/flags byte (see
-// Reply below).
+// Reply below) — READ replies must be checked with is_read_success()
+// after the Reply definition, not with this predicate.
 bool is_success(Status status);
 
 // A host→device frame. Owns its bytes; serialization is explicit.
@@ -131,6 +132,14 @@ struct Reply {
                (static_cast<std::uint8_t>(status) & 0x80) != 0;
     }
 };
+
+// READ-specific success. A READ reply's status byte is a flags byte (READ
+// forms above): 0x08 ordinary, 0x88 (= 0x08 | 0x80) with an event pending
+// — both are successful READs (`event_pending()` still reports the bit).
+// Every other flags byte (0x00, 0x01, 0x09, 0x89, …) is not documented
+// for READ replies and stays rejected. Returns false for non-READ
+// replies: ordinary ACK/poll status handling remains is_success().
+bool is_read_success(const Reply& reply);
 
 // Parse a reply, validating its form against the request type that
 // produced it. Returns:

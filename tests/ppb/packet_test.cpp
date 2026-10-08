@@ -183,6 +183,74 @@ PAKON_TEST(parse_read_reply_event_flag) {
     EXPECT(reply->event_pending());
 }
 
+// --- READ flags success predicate (is_read_success) -------------------------
+//
+// A READ reply's status byte is a flags byte: 0x08 ordinary, 0x88
+// (= 0x08 | 0x80) successful READ with an event pending (docs/PPB.md;
+// 2657:1 in the capture corpus). Ordinary is_success() keeps its exact
+// pre-existing meaning for ACK/poll replies.
+
+PAKON_TEST(read_flags_0x08_accepted) {
+    // Ordinary READ flags byte 0x08 — the documented success value.
+    const auto reply = pakon::ppb::parse_reply(hex("0103400800"), FrameType::read);
+    EXPECT(reply.has_value());
+    EXPECT(pakon::ppb::is_read_success(*reply));
+    EXPECT(!reply->event_pending());
+}
+
+PAKON_TEST(read_flags_0x88_accepted) {
+    // 0x88 = 0x08 | 0x80: successful READ + event pending. Vector is
+    // the module-info reply the warm lab unit sent on 2026-10-08
+    // (identify run that previously failed ppb_bad_status):
+    //   01 0e 40 88 04 20 40 12 04 c0 21 02 00 00 92 00
+    const auto reply = pakon::ppb::parse_reply(
+        hex("010e40880420401204c0210200009200"), FrameType::read);
+    EXPECT(reply.has_value());
+    EXPECT(pakon::ppb::is_read_success(*reply));
+    EXPECT_EQ(reply->payload.size(), std::size_t{12});
+    // The ordinary predicate still refuses 0x88 — nothing global changed.
+    EXPECT(!pakon::ppb::is_success(reply->status));
+}
+
+PAKON_TEST(read_flags_0x88_reports_event_pending) {
+    // Acceptance must not swallow the event bit.
+    const auto reply = pakon::ppb::parse_reply(hex("0103408800"), FrameType::read);
+    EXPECT(reply.has_value());
+    EXPECT(reply->event_pending());
+    EXPECT(pakon::ppb::is_read_success(*reply));
+}
+
+PAKON_TEST(read_invalid_flags_rejected) {
+    // Not documented READ flags bytes: 0x09 bus error, 0x89 bus error
+    // with event bit, 0x00 (ordinary ACK status — never observed as a
+    // READ flags byte). All parse fine; the predicate must refuse them.
+    for (const char* wire : {"0103400900", "0103408900", "0103400000"}) {
+        const auto reply = pakon::ppb::parse_reply(hex(wire), FrameType::read);
+        EXPECT(reply.has_value());
+        EXPECT(!pakon::ppb::is_read_success(*reply));
+    }
+}
+
+PAKON_TEST(ordinary_status_behavior_unchanged) {
+    // Ordinary status semantics, byte for byte as before this change.
+    EXPECT(pakon::ppb::is_success(Status::ok));                  // 0x00
+    EXPECT(pakon::ppb::is_success(Status::success_alt));         // 0x08
+    EXPECT(!pakon::ppb::is_success(Status::not_acknowledged));   // 0x01
+    EXPECT(!pakon::ppb::is_success(Status::bus_error));          // 0x09
+    EXPECT(!pakon::ppb::is_success(static_cast<Status>(0x88)));  // still invalid
+    // is_read_success() is READ-specific: it declines ACK and poll
+    // replies even when their status is a success.
+    const auto ack = pakon::ppb::parse_reply(hex("07021008"), FrameType::cmd);
+    EXPECT(ack.has_value());
+    EXPECT(pakon::ppb::is_success(ack->status));
+    EXPECT(!pakon::ppb::is_read_success(*ack));
+    const auto poll = pakon::ppb::parse_reply(hex("03031000aa"),
+                                               FrameType::read_status);
+    EXPECT(poll.has_value());
+    EXPECT(pakon::ppb::is_success(poll->status));
+    EXPECT(!pakon::ppb::is_read_success(*poll));
+}
+
 // --- Rejections (safety and robustness) ------------------------------------
 
 PAKON_TEST(reject_type_zero_frame) {

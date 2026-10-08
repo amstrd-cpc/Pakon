@@ -173,7 +173,7 @@ Result<Identity> Scanner::identify() {
             if (reply->status == Status::not_acknowledged) {
                 return std::optional<ModuleInfo>{};
             }
-            if (!ppb::is_success(reply->status)) {
+            if (!ppb::is_read_success(*reply)) {
                 return failure<std::optional<ModuleInfo>>(
                     ErrorKind::ppb_bad_status,
                     std::format("module-info read from 0x{:02x}: status {}",
@@ -207,7 +207,7 @@ Result<Identity> Scanner::identify() {
         // 0f 03 in the capture corpus; semantics not documented.
         auto bridge = client_->exchange(ppb::make_read(protocol::kAddrHost, 2, 0x03),
                                         FrameType::read);
-        if (bridge && ppb::is_success(bridge->status) &&
+        if (bridge && ppb::is_read_success(*bridge) &&
             bridge->payload.size() == 2) {
             identity.bridge_info = std::array<std::uint8_t, 2>{
                 bridge->payload[0], bridge->payload[1]};
@@ -281,7 +281,7 @@ Result<StatusReport> Scanner::status() {
         if (reply->status == Status::not_acknowledged) {
             return std::optional<std::vector<std::uint8_t>>{};
         }
-        if (!ppb::is_success(reply->status)) {
+        if (!ppb::is_read_success(*reply)) {
             return failure<std::optional<std::vector<std::uint8_t>>>(
                 ErrorKind::ppb_bad_status,
                 std::format("read 0x{:02x} ({}): status {}", reg, what,
