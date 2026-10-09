@@ -1,6 +1,6 @@
 // pakon-cli — command-line diagnostics for the Pakon F-X35 scanner stack.
 //
-// Commands (Phase 1-4 scope + bootstrap probe + diagnostics):
+// Commands (Phase 1-4 scope + bootstrap probe + diagnostics + scan):
 //   list                 enumerate attached Pakon scanners (no I/O sent)
 //   attrib               read-only PnP/driver attribution report
 //                        (property queries only - no device I/O)
@@ -12,6 +12,10 @@
 //                        personality), no bulk traffic, no writes
 //   identify             open PPB session, presence probes, module info
 //   status               identify + status polls and read-only registers
+//   scan                 capture a scan session — explicit opt-in only:
+//                        --dry-run prints the plan with NO device opened;
+//                        --live-scan executes over one warm session
+//                        (scan_cli.hpp carries the full safety rules)
 //
 // Options:
 //   --log <level>        off|error|warn|info|debug|trace (default info;
@@ -23,6 +27,7 @@
 #include <string_view>
 #include <vector>
 
+#include "scan_cli.hpp"
 #include "pakon/bootstrap/probe.hpp"
 #include "pakon/logging/logger.hpp"
 #include "pakon/scanner/scanner.hpp"
@@ -63,6 +68,9 @@ void print_usage() {
         "             documented vendor control read — see docs/BOOTSTRAP.md)\n"
         "  identify   open the PPB session and identify the scanner model\n"
         "  status     identify, then poll status registers (read-only)\n"
+        "\n");
+    pakon::cli::print_scan_usage(stdout);
+    std::puts(
         "\n"
         "log levels: off, error, warn, info, debug, trace\n"
         "            (trace prints full TX/RX packet hex dumps)\n");
@@ -509,11 +517,42 @@ int run_scanner_command(std::string_view command) {
     return 0;
 }
 
+// The live-scan session opener wired into cli::run_scan_command.
+//
+// Reuses the EXISTING working sequence — usb::open_first(cold_ok=false)
+// (warm device only: the cold/bootstrap path is probe's, not ours),
+// Scanner::connect (the documented open handshake that identify and
+// status already perform), identify() — and hands over ONE session:
+// command frames (bulk 0x01/0x81) and image reads (bulk 0x86) both
+// ride this transport, so no second connection ever competes with it.
+// No cold boot, no firmware reload, no re-initialisation beyond the
+// handshake identify/status already do today.
+pakon::Result<pakon::cli::LiveScanSession> open_live_session() {
+    auto transport = pakon::usb::open_first(/*cold_ok=*/false);
+    if (!transport) {
+        return transport.error();
+    }
+    auto scanner = pakon::scanner::Scanner::connect(std::move(*transport));
+    if (!scanner) {
+        return scanner.error();
+    }
+    auto identity = (*scanner)->identify();
+    if (!identity) {
+        return identity.error();
+    }
+    pakon::cli::LiveScanSession session;
+    session.scanner = std::move(*scanner);
+    session.identity = std::move(*identity);
+    session.client = &session.scanner->client();
+    return session;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     std::string_view command;
     std::string_view log_level = "info";
+    std::vector<std::string> scan_args;
 
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
@@ -528,6 +567,11 @@ int main(int argc, char** argv) {
             return 0;
         } else if (command.empty()) {
             command = arg;
+        } else if (command == "scan") {
+            // Everything after `scan` belongs to the scan command's own
+            // argument validation (scan_cli.cpp); it decides usage
+            // errors before any device entry point can run.
+            scan_args.emplace_back(arg);
         } else {
             std::fprintf(stderr, "error: unexpected argument '%s'\n", argv[i]);
             return 2;
@@ -561,6 +605,15 @@ int main(int argc, char** argv) {
     }
     if (command == "identify" || command == "status") {
         return run_scanner_command(command);
+    }
+    if (command == "scan") {
+        // Explicit opt-in only: run_scan_command opens the scanner
+        // solely on the --live-scan path (scan_cli.hpp). The default
+        // invocation and --dry-run are decided in validation, before
+        // the opener exists — no USB traffic is possible there.
+        pakon::cli::ScanCliDeps deps;
+        deps.open_session = &open_live_session;
+        return pakon::cli::run_scan_command(scan_args, deps, stdout, stderr);
     }
 
     std::fprintf(stderr, "error: unknown command '%s'\n",

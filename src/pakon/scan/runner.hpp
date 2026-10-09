@@ -5,12 +5,12 @@
 // command channel, while draining image windows over the image source
 // under explicit completion policies.
 //
-// Live scanning is not performed by anything in this file's default
-// use: tests drive the runner with scripted command channels and
-// synthetic image sources only. Wiring a live USB transport
-// (PpbCommandChannel + a bulk-0x86 image source) is a separately
-// approved step; the interfaces here exist so that step is an
-// adapter, not a redesign.
+// The runner itself performs no USB I/O: commands arrive through
+// ICommandChannel and pixels through image::IImageSource. The approved
+// live wiring (apps/pakon-cli/scan_cli.cpp) binds those to
+// PpbCommandChannel + UsbImageSource over ONE already-open session;
+// every test in this repository drives the runner with scripted
+// channels and synthetic sources only.
 
 #include <memory>
 
@@ -72,6 +72,17 @@ private:
     std::vector<ppb::Frame> calibration_frames_;
     std::vector<ppb::Frame> transport_frames_;
     std::vector<ppb::Frame> teardown_frames_;
+
+    // Failure policy: once the acquisition has started (service
+    // handled — the lamp/CCD configuration and window streams follow),
+    // a fault first attempts ONE best-effort teardown pass (idle motor,
+    // lamp off, EndAcquisition, disengage) so a failed run leaves the
+    // hardware quiescent. Bounded: never retried, never allowed to
+    // replace the original error, and a fault inside the normal
+    // teardown phase never re-enters it (teardown_attempted_ marks
+    // both paths).
+    bool acquisition_started_{false};
+    bool teardown_attempted_{false};
 };
 
 } // namespace pakon::scan

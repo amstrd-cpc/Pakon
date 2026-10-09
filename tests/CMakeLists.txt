@@ -86,6 +86,19 @@ target_link_libraries(reader_test PRIVATE pakon_core)
 target_include_directories(reader_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME reader COMMAND reader_test)
 
+# Add the scan CLI test: it compiles apps/pakon-cli/scan_cli.cpp DIRECTLY
+# (main.cpp stays out — no production USB opener is linked) and replaces
+# the SessionOpener with a counting trap. That is the proof: default
+# invocation and --dry-run exit without the opener ever being called, so
+# no USB code could have run; --live-scan calls it exactly once.
+add_executable(scan_cli_test cli/scan_cli_test.cpp
+    ${CMAKE_SOURCE_DIR}/apps/pakon-cli/scan_cli.cpp)
+target_link_libraries(scan_cli_test PRIVATE pakon_core)
+target_include_directories(scan_cli_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/apps/pakon-cli)
+add_test(NAME scan_cli COMMAND scan_cli_test)
+
 # Raw image output: PAKRAW01 header layout pinned byte-by-byte and the
 # OEM-planar geometry, both read back from disk.
 add_executable(raw_writer_test image/raw_writer_test.cpp)

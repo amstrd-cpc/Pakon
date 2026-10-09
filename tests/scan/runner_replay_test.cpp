@@ -20,8 +20,11 @@
 // are still sent byte-exactly and still checked against recorded hex
 // — only their position is allowed to differ.
 
+#include <algorithm>
 #include <cstdio>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -75,16 +78,24 @@ struct Replay {
 };
 
 // Builds the whole replay script; reports construction problems via
-// `error` (empty == success).
-bool build_replay(Replay& out, std::string& error) {
+// `error` (empty == success). When `transport_fault` is set, the reply
+// to that transport-plan frame is flipped into a rejection AND the
+// remaining transport frames are dropped from the script — modelling a
+// device that rejects mid-phase: the runner must stop there and send
+// only its best-effort teardown next (the script's tail is exactly the
+// teardown plan, so consuming it proves the teardown ran).
+bool build_replay(Replay& out, std::string& error,
+                  std::optional<std::size_t> transport_fault = std::nullopt) {
     const auto& addresses = protocol::kF135Plus;
     const scan::ScanPlanParameters params{};
 
     FixtureCursor cursor;
     std::vector<Step> steps;
 
-    auto add_plan = [&](const std::vector<ppb::Frame>& frames, std::size_t diverged) {
-        for (std::size_t i = 0; i < frames.size(); ++i) {
+    auto add_plan = [&](const std::vector<ppb::Frame>& frames, std::size_t diverged,
+                        std::size_t limit = std::numeric_limits<std::size_t>::max()) {
+        const std::size_t count = std::min(frames.size(), limit);
+        for (std::size_t i = 0; i < count; ++i) {
             const auto req = hex_of(frames[i]);
             std::string rsp;
             if (req.empty()) {
@@ -130,9 +141,23 @@ bool build_replay(Replay& out, std::string& error) {
     if (!error.empty()) {
         return false;
     }
-    add_plan(scan::transport_plan(addresses, params), 0);
+    const auto transport = scan::transport_plan(addresses, params);
+    const std::size_t transport_limit =
+        transport_fault ? std::min(*transport_fault + 1, transport.size())
+                        : transport.size();
+    add_plan(transport, 0, transport_limit);
     if (!error.empty()) {
         return false;
+    }
+    if (transport_fault) {
+        if (*transport_fault >= transport.size()) {
+            error = "transport fault index out of range";
+            return false;
+        }
+        // Status 0x01 = not acknowledged: the rejection that faults
+        // the runner mid-phase (same ack shape the capture corpus
+        // records for write/command frames).
+        steps.back().rsp = "07024401";
     }
     add_plan(scan::teardown_plan(addresses, params), 0);
     if (!error.empty()) {
@@ -263,6 +288,59 @@ PAKON_TEST(rejected_reply_faults_the_session_without_retry) {
     // The failure happened on the last scripted frame: the session got
     // all the way through teardown, then aborted on the rejection.
     EXPECT(channel.exhausted());
+}
+
+PAKON_TEST(fault_in_transport_runs_one_best_effort_teardown) {
+    Replay replay;
+    std::string error;
+    // Reject the FIRST transport frame (the pre-run idle restore): the
+    // runner must stop the phase there, attempt exactly one teardown
+    // pass, and return the original error.
+    if (!build_replay(replay, error, /*transport_fault=*/0)) {
+        EXPECT_EQ(error, std::string{});
+        return;
+    }
+    test::ScriptedCommandChannel channel(replay.steps);
+
+    auto runner = scan::ScanRunner::create(replay.config);
+    EXPECT(runner.has_value());
+    if (!runner) {
+        return;
+    }
+    auto result = (*runner)->run(channel, replay.source);
+    EXPECT(!result.has_value());
+    if (!result) {
+        EXPECT_EQ(result.error().kind, ErrorKind::ppb_bad_status);
+    }
+    EXPECT_EQ((*runner)->session().state(), scan::ScanState::failed);
+    EXPECT((*runner)->session().terminal());
+
+    // The script's tail after the rejected frame is exactly the
+    // teardown plan — exhausting it proves the best-effort teardown ran
+    // after the fault, once, and stopped there.
+    EXPECT(channel.exhausted());
+    const auto teardown =
+        scan::teardown_plan(protocol::kF135Plus, scan::ScanPlanParameters{});
+    const auto& sent = channel.sent();
+    EXPECT(sent.size() > teardown.size());
+    if (sent.size() > teardown.size()) {
+        // The frame just before the teardown tail is the rejected one.
+        const auto rejected = scan::transport_plan(
+            protocol::kF135Plus, scan::ScanPlanParameters{}).front().serialize();
+        EXPECT(rejected.has_value());
+        if (rejected) {
+            EXPECT_EQ(sent[sent.size() - teardown.size() - 1],
+                      test::ScriptedCommandChannel::to_hex(*rejected));
+        }
+    }
+    for (std::size_t i = 0; i < teardown.size() && i < sent.size(); ++i) {
+        const auto bytes = teardown[i].serialize();
+        EXPECT(bytes.has_value());
+        if (bytes) {
+            EXPECT_EQ(sent[sent.size() - teardown.size() + i],
+                      test::ScriptedCommandChannel::to_hex(*bytes));
+        }
+    }
 }
 
 int main() { return pakon::test::run_all(); }

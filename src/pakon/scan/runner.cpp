@@ -60,6 +60,22 @@ Result<ScanResult> ScanRunner::run(ICommandChannel& commands, image::IImageSourc
     const auto& a = config_.addresses;
 
     auto fault = [&](const Error& error) -> Result<ScanResult> {
+        // Best-effort teardown for failures after acquisition started:
+        // one pass over the teardown plan so the motor returns to idle
+        // speed and the lamp goes off even though the scan aborted.
+        // Its failures are logged and swallowed — the caller always
+        // sees the ORIGINAL error — and it is attempted at most once
+        // (a fault while tearing down already used its one attempt).
+        if (acquisition_started_ && !teardown_attempted_) {
+            teardown_attempted_ = true;
+            if (auto t = run_plan(commands, teardown_frames_, "teardown (best effort)");
+                !t) {
+                log::Logger::instance().log(
+                    log::Level::warn,
+                    "best-effort teardown after failure did not complete: {}",
+                    t.error().message);
+            }
+        }
         if (auto f = session_.handle(ScanEvent::fault); !f) {
             return failure<ScanResult>(
                 ErrorKind::scanner_unexpected_state,
@@ -108,6 +124,10 @@ Result<ScanResult> ScanRunner::run(ICommandChannel& commands, image::IImageSourc
     if (auto s = session_.handle(ScanEvent::service_done); !s) {
         return fault(s.error());
     }
+    // From here on the acquisition is started: the lamp/CCD
+    // configuration and the window streams follow, so any failure
+    // below first attempts the best-effort teardown (see fault()).
+    acquisition_started_ = true;
 
     // calibrating: send the window's command block, then drain W1
     // until its policy completes. (The OEM interleaves the block with
@@ -168,7 +188,10 @@ Result<ScanResult> ScanRunner::run(ICommandChannel& commands, image::IImageSourc
         return fault(s.error());
     }
 
-    // tearing_down → complete.
+    // tearing_down → complete. This is the one teardown attempt of the
+    // success path: mark it so a failure here never re-enters the
+    // best-effort branch in fault().
+    teardown_attempted_ = true;
     if (auto r = run_plan(commands, teardown_frames_, "teardown"); !r) {
         return fail_plan(r);
     }
