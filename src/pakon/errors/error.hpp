@@ -59,6 +59,9 @@ enum class ErrorKind {
     image_bad_marker,
     image_no_completion_policy, // scan window configured without a completion policy
     image_bad_geometry,         // row window/geometry cannot hold the requested layout
+
+    // Process/operator layer
+    cancelled,                  // interrupt (Ctrl+C) observed at a bounded point of a run
 };
 
 // A single error: what went wrong and optionally why (device message,

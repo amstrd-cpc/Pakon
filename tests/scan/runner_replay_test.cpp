@@ -71,6 +71,31 @@ constexpr std::size_t kW1Rows = 16;
 constexpr std::size_t kW2Period = 3081;
 constexpr std::size_t kW2Rows = 24;
 
+// Service-phase script shape built by build_replay: three idle polls,
+// then the recorded service-wanted poll.
+constexpr std::size_t kScriptedServicePolls = 4;
+
+// Requests the cancel token on its `at`-th exchange (1-based), then
+// passes everything through unchanged: models Ctrl+C landing inside a
+// command phase, at an exactly known frame.
+struct InterruptingChannel final : scan::ICommandChannel {
+    InterruptingChannel(test::ScriptedCommandChannel& inner, scan::CancelToken& token,
+                        std::size_t at)
+        : inner_(inner), token_(token), at_(at) {}
+
+    Result<ppb::Reply> exchange(const ppb::Frame& frame) override {
+        if (++count_ == at_) {
+            token_.request();
+        }
+        return inner_.exchange(frame);
+    }
+
+    test::ScriptedCommandChannel& inner_;
+    scan::CancelToken& token_;
+    std::size_t at_;
+    std::size_t count_{0};
+};
+
 struct Replay {
     std::vector<Step> steps;
     test::SyntheticImageSource source{test::ImageTail::eos};
@@ -341,6 +366,185 @@ PAKON_TEST(fault_in_transport_runs_one_best_effort_teardown) {
                       test::ScriptedCommandChannel::to_hex(*bytes));
         }
     }
+}
+
+PAKON_TEST(service_poll_deadline_faults_while_device_still_idle) {
+    // Blocker C: the service wait was an unbounded while(true). A zero
+    // deadline is rejected before any I/O...
+    Replay replay;
+    std::string error;
+    if (!build_replay(replay, error)) {
+        EXPECT_EQ(error, std::string{});
+        return;
+    }
+    scan::ScanRunnerConfig zero = replay.config;
+    zero.service_wait_timeout_ms = 0;
+    auto rejected = scan::ScanRunner::create(zero);
+    EXPECT(!rejected.has_value());
+    if (!rejected) {
+        EXPECT_EQ(rejected.error().kind, ErrorKind::scanner_timeout);
+    }
+
+    // ...and a short one ends the wait with a diagnostic instead of
+    // hanging: the service-wanted poll is replaced by idle replies, so
+    // the DEADLINE (not the device) must end the wait.
+    const std::size_t init =
+        scan::init_plan(protocol::kF135Plus, scan::ScanPlanParameters{}).size();
+    replay.steps.insert(replay.steps.begin() + static_cast<std::ptrdiff_t>(init + 3),
+                        12, Step{fixture::kServicePollReq, "0103400800"});
+    replay.config.service_wait_timeout_ms = 120;
+
+    test::ScriptedCommandChannel channel(replay.steps);
+    auto runner = scan::ScanRunner::create(replay.config);
+    EXPECT(runner.has_value());
+    if (!runner) {
+        return;
+    }
+    auto result = (*runner)->run(channel, replay.source);
+    EXPECT(!result.has_value());
+    if (!result) {
+        EXPECT_EQ(result.error().kind, ErrorKind::scanner_timeout);
+        EXPECT(std::string(result.error().message).find("did not request service") !=
+               std::string::npos);
+    }
+    EXPECT_EQ((*runner)->session().state(), scan::ScanState::failed);
+    EXPECT((*runner)->session().terminal());
+    // The fault was before acquisition: the device never left its
+    // idle configuration and no teardown was attempted (none needed).
+    EXPECT(!(*runner)->acquisition_started());
+    EXPECT(!(*runner)->teardown_attempted());
+    // Only init frames and a bounded number of polls went out — the
+    // wait cannot have run away (script far from exhausted).
+    EXPECT(!channel.exhausted());
+    EXPECT(channel.position() < init + 15);
+}
+
+PAKON_TEST(cancel_before_service_ends_wait_without_teardown) {
+    // Blocker B: a pre-latched interrupt is observed at the FIRST
+    // service-wait iteration — only init frames were sent, no service
+    // poll, no teardown (the device is still idle).
+    Replay replay;
+    std::string error;
+    if (!build_replay(replay, error)) {
+        EXPECT_EQ(error, std::string{});
+        return;
+    }
+    scan::CancelToken token;
+    token.request();
+    replay.config.cancel = &token;
+
+    test::ScriptedCommandChannel channel(replay.steps);
+    auto runner = scan::ScanRunner::create(replay.config);
+    EXPECT(runner.has_value());
+    if (!runner) {
+        return;
+    }
+    auto result = (*runner)->run(channel, replay.source);
+    EXPECT(!result.has_value());
+    if (!result) {
+        EXPECT_EQ(result.error().kind, ErrorKind::cancelled);
+        EXPECT(std::string(result.error().message).find("still idle") !=
+               std::string::npos);
+    }
+    EXPECT_EQ((*runner)->session().state(), scan::ScanState::failed);
+    EXPECT((*runner)->session().terminal());
+    const std::size_t init =
+        scan::init_plan(protocol::kF135Plus, scan::ScanPlanParameters{}).size();
+    EXPECT_EQ(channel.position(), init);
+    EXPECT(!(*runner)->acquisition_started());
+    EXPECT(!(*runner)->teardown_attempted());
+}
+
+PAKON_TEST(cancel_at_phase_boundary_runs_teardown_before_windows) {
+    // Interrupt landing on the LAST service-phase frame: the boundary
+    // check after service_done (acquisition already marked started)
+    // must cancel before any calibration frame, and the one
+    // best-effort teardown must be attempted — its first frame finds
+    // the script's next step is a calibration frame, the mismatch is
+    // logged and swallowed, and the CANCELLED error is what returns.
+    Replay replay;
+    std::string error;
+    if (!build_replay(replay, error)) {
+        EXPECT_EQ(error, std::string{});
+        return;
+    }
+    scan::CancelToken token;
+    test::ScriptedCommandChannel inner(replay.steps);
+    const std::size_t init =
+        scan::init_plan(protocol::kF135Plus, scan::ScanPlanParameters{}).size();
+    const std::size_t service =
+        scan::service_plan(protocol::kF135Plus).size();
+    const std::size_t at = init + kScriptedServicePolls + service; // last service frame
+    InterruptingChannel channel(inner, token, at);
+    replay.config.cancel = &token;
+
+    auto runner = scan::ScanRunner::create(replay.config);
+    EXPECT(runner.has_value());
+    if (!runner) {
+        return;
+    }
+    auto result = (*runner)->run(channel, replay.source);
+    EXPECT(!result.has_value());
+    if (!result) {
+        EXPECT_EQ(result.error().kind, ErrorKind::cancelled);
+        EXPECT(std::string(result.error().message).find("before the calibration window") !=
+               std::string::npos);
+    }
+    EXPECT_EQ((*runner)->session().state(), scan::ScanState::failed);
+    EXPECT((*runner)->session().terminal());
+    EXPECT((*runner)->acquisition_started());
+    EXPECT((*runner)->teardown_attempted());
+    // Beyond the interrupt frame, at most the single teardown frame
+    // that hit the mismatching script step: no calibration frame ran.
+    EXPECT(inner.position() <= at + 1);
+}
+
+PAKON_TEST(cancel_after_calibration_never_starts_film_window) {
+    // Interrupt landing on the LAST calibration frame: W1 drains to
+    // its row budget (the synthetic source ignores the token, exactly
+    // like a device mid-stream), then the boundary before the film
+    // window fires — the transport plan must NOT start, and the one
+    // best-effort teardown is attempted.
+    Replay replay;
+    std::string error;
+    if (!build_replay(replay, error)) {
+        EXPECT_EQ(error, std::string{});
+        return;
+    }
+    scan::CancelToken token;
+    test::ScriptedCommandChannel inner(replay.steps);
+    const std::size_t init =
+        scan::init_plan(protocol::kF135Plus, scan::ScanPlanParameters{}).size();
+    const std::size_t service = scan::service_plan(protocol::kF135Plus).size();
+    const std::size_t calibration =
+        scan::calibration_plan(protocol::kF135Plus, scan::ScanPlanParameters{}).size();
+    const std::size_t at = init + kScriptedServicePolls + service + calibration;
+    InterruptingChannel channel(inner, token, at);
+    replay.config.cancel = &token;
+
+    auto runner = scan::ScanRunner::create(replay.config);
+    EXPECT(runner.has_value());
+    if (!runner) {
+        return;
+    }
+    auto result = (*runner)->run(channel, replay.source);
+    EXPECT(!result.has_value());
+    if (!result) {
+        EXPECT_EQ(result.error().kind, ErrorKind::cancelled);
+        EXPECT(std::string(result.error().message).find(
+                   "after the calibration window") != std::string::npos);
+    }
+    EXPECT_EQ((*runner)->session().state(), scan::ScanState::failed);
+    EXPECT((*runner)->session().terminal());
+    EXPECT((*runner)->acquisition_started());
+    EXPECT((*runner)->teardown_attempted());
+    // The film window never started: past the interrupt frame (92),
+    // exactly TWO more exchanges — teardown[0] (motor idle) is
+    // byte-identical to transport[0] so it consumes that step, and
+    // teardown[1] (lamp off) mismatches transport[1] and aborts the
+    // best-effort pass, whose failure is swallowed. No transport frame
+    // of its own ever went out.
+    EXPECT_EQ(inner.position(), at + 2);
 }
 
 int main() { return pakon::test::run_all(); }

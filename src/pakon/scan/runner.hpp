@@ -17,11 +17,28 @@
 #include "pakon/image/completion.hpp"
 #include "pakon/image/reader.hpp"
 #include "pakon/image/source.hpp"
+#include "pakon/scan/cancel.hpp"
 #include "pakon/scan/plan.hpp"
 #include "pakon/scan/session.hpp"
 #include "pakon/scan/transport.hpp"
 
 namespace pakon::scan {
+
+// Default service-poll bounds. The wait used to be an unbounded
+// while(true) (live-scan audit, blocker C); it is now deadline-bounded
+// and progress-logged, with these capture-derived defaults:
+//   - deadline: in base4-ir.jsonl init ends t=5.010, the first service
+//     poll goes out at t=5.013 and the device answers service-wanted
+//     at t=11.506 — 6.5 s. Worst reply latency over all 11741 captured
+//     exchanges is 36 ms, so nothing near the deadline is ambiguous.
+//     60 s is ~9x that margin; on expiry the session faults while the
+//     device is still idle (lamp off, disengaged).
+inline constexpr unsigned long kServiceWaitTimeoutMs = 60000;
+//   - cadence: the OEM's background polls repeat at 20 Hz
+//     (bridge/pakonusb.py:796) and the captured status reads average
+//     ~29 ms apart. 50 ms sits in that band, bounds log volume and
+//     gives the cancel/deadline checks sub-frame granularity.
+inline constexpr unsigned long kServicePollIntervalMs = 50;
 
 struct ScanRunnerConfig {
     protocol::ControllerAddresses addresses{protocol::kF135Plus};
@@ -36,6 +53,18 @@ struct ScanRunnerConfig {
     // Image read size (defaults to the capture corpus's 20480-byte
     // transfers; any size works per image-stream.md).
     std::size_t read_bytes{image::kCaptureChunkBytes};
+
+    // Cooperative cancellation (Ctrl+C): observed at the service wait,
+    // at the two phase boundaries and — through UsbImageSource — before
+    // every image read. NEVER observed inside a teardown: cleanup runs
+    // to completion once it starts. nullptr = never cancelled (offline
+    // runs and tests).
+    const CancelToken* cancel{nullptr};
+
+    // Service-poll deadline; see kServiceWaitTimeoutMs above for the
+    // capture evidence behind the default. 0 would fault before the
+    // first poll and is rejected by create().
+    unsigned long service_wait_timeout_ms{kServiceWaitTimeoutMs};
 };
 
 struct ScanResult {
@@ -58,6 +87,14 @@ public:
     Result<ScanResult> run(ICommandChannel& commands, image::IImageSource& images);
 
     const ScanSession& session() const { return session_; }
+
+    // For failure reporting (apps/pakon-cli/scan_cli.cpp): whether the
+    // acquisition phase was reached, and whether the one teardown pass
+    // (success or best-effort) was taken — so the CLI never claims a
+    // teardown that did not run, and never claims one was needed when
+    // the fault was before acquisition.
+    bool acquisition_started() const { return acquisition_started_; }
+    bool teardown_attempted() const { return teardown_attempted_; }
 
 private:
     ScanRunner() = default;

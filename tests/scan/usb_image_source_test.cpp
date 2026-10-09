@@ -119,4 +119,34 @@ PAKON_TEST(non_timeout_failures_propagate) {
     }
 }
 
+PAKON_TEST(cancel_is_observed_before_the_pipe_is_touched) {
+    // Ctrl+C during a window: the token is checked BEFORE the bulk
+    // read, so an interrupt never becomes an in-flight transfer, an
+    // idle tick, or part of the completion count — it is an error
+    // (ErrorKind::cancelled) that propagates to the runner's teardown.
+    FakeTransport transport;
+    transport.script.push_back({false, {}, {0x11}});
+    scan::CancelToken token;
+    token.request();
+    scan::UsbImageSource source(transport, &token);
+
+    auto chunk = source.read(4096);
+    EXPECT(!chunk.has_value());
+    if (!chunk) {
+        EXPECT_EQ(chunk.error().kind, ErrorKind::cancelled);
+    }
+    EXPECT_EQ(transport.index, 0u);        // no bulk read was issued
+    EXPECT_EQ(transport.last_endpoint, 0); // transport untouched
+
+    // With the token clear the same adapter behaves exactly as before.
+    token.reset();
+    auto ok = source.read(4096);
+    EXPECT(ok.has_value());
+    if (ok) {
+        EXPECT_EQ(ok->bytes, std::vector<std::uint8_t>({0x11}));
+        EXPECT_EQ(ok->timed_out, false);
+    }
+    EXPECT_EQ(transport.index, 1u);
+}
+
 int main() { return pakon::test::run_all(); }

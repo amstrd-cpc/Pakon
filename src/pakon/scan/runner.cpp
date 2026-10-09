@@ -1,6 +1,8 @@
 #include "pakon/scan/runner.hpp"
 
+#include <chrono>
 #include <format>
+#include <thread>
 
 #include "pakon/logging/logger.hpp"
 #include "pakon/protocol/scan_commands.hpp"
@@ -17,6 +19,11 @@ Result<std::unique_ptr<ScanRunner>> ScanRunner::create(ScanRunnerConfig config) 
         return failure<std::unique_ptr<ScanRunner>>(
             ErrorKind::image_no_completion_policy,
             "read size of 0 bytes would never make progress");
+    }
+    if (config.service_wait_timeout_ms == 0) {
+        return failure<std::unique_ptr<ScanRunner>>(
+            ErrorKind::scanner_timeout,
+            "a service wait deadline of 0 ms would fault before the first poll");
     }
     auto runner = std::unique_ptr<ScanRunner>(new ScanRunner());
     runner->config_ = std::move(config);
@@ -81,8 +88,11 @@ Result<ScanResult> ScanRunner::run(ICommandChannel& commands, image::IImageSourc
                 ErrorKind::scanner_unexpected_state,
                 std::format("session fault handling failed: {}", f.error().message));
         }
-        log::Logger::instance().log(log::Level::error, "scan session failed: {}",
-                                    error.message);
+        log::Logger::instance().log(
+            log::Level::error, "{}: {}",
+            error.kind == ErrorKind::cancelled ? "scan session cancelled"
+                                                : "scan session failed",
+            error.message);
         return failure<ScanResult>(error.kind, error.message);
     };
     auto fail_plan = [&](VoidResult r) -> Result<ScanResult> {
@@ -101,19 +111,70 @@ Result<ScanResult> ScanRunner::run(ICommandChannel& commands, image::IImageSourc
 
     // ready: poll the light service register until the device asks for
     // service (payload 0x02; capture corpus: idle replies carry 00).
-    while (true) {
-        auto reply = commands.exchange(protocol::scan::read_service_status(a.light));
-        if (!reply) {
-            return fault(reply.error());
+    // The wait is bounded on three axes (it used to be a bare
+    // while(true) with no deadline, no counts and no logging — audit
+    // blocker C):
+    //   - cancellation: an interrupt ends the wait cleanly, while the
+    //     device is still idle;
+    //   - deadline: service_wait_timeout_ms after the first poll, with
+    //     the poll count in the message (kServiceWaitTimeoutMs for the
+    //     capture evidence behind the default);
+    //   - visibility: start, a 5 s heartbeat and the outcome are logged
+    //     at info (the CLI's default level), so the operator never
+    //     watches a silent gap after the `live scan:` line.
+    {
+        const auto started = std::chrono::steady_clock::now();
+        const auto deadline =
+            started + std::chrono::milliseconds(config_.service_wait_timeout_ms);
+        auto heartbeat = started;
+        unsigned long polls = 0;
+        log::Logger::instance().log(
+            log::Level::info,
+            "service poll: waiting for the device to request service (deadline {} ms)",
+            config_.service_wait_timeout_ms);
+        while (true) {
+            if (config_.cancel && config_.cancel->requested()) {
+                return fault(Error{ErrorKind::cancelled,
+                                   "interrupt observed while waiting for service "
+                                   "(the device is still idle)"});
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                return fault(Error{
+                    ErrorKind::scanner_timeout,
+                    std::format("the device did not request service within {} ms "
+                                "({} polls); aborting while the device is still idle",
+                                config_.service_wait_timeout_ms, polls)});
+            }
+            auto reply = commands.exchange(protocol::scan::read_service_status(a.light));
+            if (!reply) {
+                return fault(reply.error());
+            }
+            if (!ppb::is_read_success(*reply)) {
+                return fault(Error{ErrorKind::ppb_bad_status,
+                                   std::format("service poll rejected with flags {}",
+                                               ppb::to_string(reply->status))});
+            }
+            ++polls;
+            if (protocol::scan::service_requested(*reply)) {
+                break;
+            }
+            const auto now = std::chrono::steady_clock::now();
+            if (now - heartbeat >= std::chrono::seconds(5)) {
+                heartbeat = now;
+                log::Logger::instance().log(
+                    log::Level::info, "service poll: still waiting ({} polls, {} ms)",
+                    polls,
+                    std::chrono::duration_cast<std::chrono::milliseconds>(now - started)
+                        .count());
+            }
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kServicePollIntervalMs));
         }
-        if (!ppb::is_read_success(*reply)) {
-            return fault(Error{ErrorKind::ppb_bad_status,
-                               std::format("service poll rejected with flags {}",
-                                           ppb::to_string(reply->status))});
-        }
-        if (protocol::scan::service_requested(*reply)) {
-            break;
-        }
+        log::Logger::instance().log(
+            log::Level::info, "service requested after {} polls ({} ms)", polls,
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started)
+                .count());
     }
     if (auto s = session_.handle(ScanEvent::service_requested); !s) {
         return fault(s.error());
@@ -128,6 +189,14 @@ Result<ScanResult> ScanRunner::run(ICommandChannel& commands, image::IImageSourc
     // configuration and the window streams follow, so any failure
     // below first attempts the best-effort teardown (see fault()).
     acquisition_started_ = true;
+
+    // Interrupt boundaries: checked between phases, never inside a
+    // plan (cleanup must not be abortable) and never after the film
+    // window (a completed scan finishes its teardown and succeeds).
+    if (config_.cancel && config_.cancel->requested()) {
+        return fault(Error{ErrorKind::cancelled,
+                           "interrupt observed before the calibration window"});
+    }
 
     // calibrating: send the window's command block, then drain W1
     // until its policy completes. (The OEM interleaves the block with
@@ -157,6 +226,11 @@ Result<ScanResult> ScanRunner::run(ICommandChannel& commands, image::IImageSourc
         return fault(s.error());
     }
 
+    if (config_.cancel && config_.cancel->requested()) {
+        return fault(Error{ErrorKind::cancelled,
+                           "interrupt observed after the calibration window; "
+                           "the film window will not start"});
+    }
     // preparing_transport → transporting.
     if (auto r = run_plan(commands, transport_frames_, "transport"); !r) {
         return fail_plan(r);

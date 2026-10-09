@@ -92,7 +92,8 @@ add_test(NAME reader COMMAND reader_test)
 # invocation and --dry-run exit without the opener ever being called, so
 # no USB code could have run; --live-scan calls it exactly once.
 add_executable(scan_cli_test cli/scan_cli_test.cpp
-    ${CMAKE_SOURCE_DIR}/apps/pakon-cli/scan_cli.cpp)
+    ${CMAKE_SOURCE_DIR}/apps/pakon-cli/scan_cli.cpp
+    ${CMAKE_SOURCE_DIR}/apps/pakon-cli/interrupt.cpp)
 target_link_libraries(scan_cli_test PRIVATE pakon_core)
 target_include_directories(scan_cli_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}

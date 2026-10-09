@@ -23,6 +23,14 @@
 //    `status` already use. No cold boot, no firmware reload, no second
 //    connection: command frames (bulk 0x01/0x81) and image reads
 //    (bulk 0x86) both ride that session's transport.
+//  - A live run is interruptible, but never by abrupt termination: the
+//    console/signal handler (apps/pakon-cli/interrupt.hpp) only
+//    latches a token, and the runner observes it at bounded points —
+//    service wait, phase boundaries, before every image read — to
+//    unwind through the ONE best-effort teardown and the
+//    DisconnectGuard (proven in tests/scan/runner_replay_test.cpp and
+//    tests/scan/usb_image_source_test.cpp). The service wait itself is
+//    deadline-bounded and progress-logged (scan::kServiceWaitTimeoutMs).
 //
 // Exit codes: 0 success, 1 runtime failure, 2 usage error (a usage
 // error is decided before the opener could run — exit 2 always means

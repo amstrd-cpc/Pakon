@@ -14,6 +14,7 @@
 #include "pakon/image/source.hpp"
 #include "pakon/ppb/client.hpp"
 #include "pakon/ppb/packet.hpp"
+#include "pakon/scan/cancel.hpp"
 #include "pakon/usb/transport.hpp"
 
 namespace pakon::scan {
@@ -52,14 +53,26 @@ private:
 // 0x86 at open (usb/win_usb_transport.cpp) — WinUSB's default is no
 // timeout at all. Non-timeout transport failures propagate.
 //
-// Nothing in the offline test suite constructs this class; tests use
-// image/source.hpp's scripted sources instead. Endpoint 0x86 is
-// pinned by image/source.hpp (capture + topology evidence).
+// Nothing outside tests constructs this class: window-level tests use
+// image/source.hpp's scripted sources, and usb_image_source_test pins
+// this adapter against a fake transport. Endpoint 0x86 is pinned by
+// image/source.hpp (capture + topology evidence).
 class UsbImageSource final : public image::IImageSource {
 public:
-    explicit UsbImageSource(usb::IUsbTransport& transport) : transport_(transport) {}
+    // `cancel` (optional): checked BEFORE each bulk read, so Ctrl+C is
+    // observed within at most one in-flight transfer (pipe deadline
+    // usb::kPipeTimeoutMs) even mid-window — and never turns into an
+    // idle tick: an interrupt is an error (ErrorKind::cancelled), not
+    // part of the completion policy's quiet-counting.
+    explicit UsbImageSource(usb::IUsbTransport& transport,
+                            const CancelToken* cancel = nullptr)
+        : transport_(transport), cancel_(cancel) {}
 
     Result<image::ImageChunk> read(std::size_t max_bytes) override {
+        if (cancel_ && cancel_->requested()) {
+            return failure<image::ImageChunk>(
+                ErrorKind::cancelled, "interrupt observed before an image read");
+        }
         auto bytes = transport_.bulk_read(image::kImageEndpoint, max_bytes);
         if (!bytes) {
             if (bytes.error().kind == ErrorKind::usb_timeout) {
@@ -75,6 +88,7 @@ public:
 
 private:
     usb::IUsbTransport& transport_;
+    const CancelToken* cancel_;
 };
 
 } // namespace pakon::scan

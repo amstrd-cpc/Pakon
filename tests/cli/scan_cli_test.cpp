@@ -14,12 +14,14 @@
 // main.cpp (which wires the production opener) is not linked here — so
 // "opener never called" is exactly "no USB code could have run".
 
+#include <csignal>
 #include <cstdio>
 #include <format>
 #include <span>
 #include <string>
 #include <vector>
 
+#include "interrupt.hpp"
 #include "scan_cli.hpp"
 #include "pakon/scan/plan.hpp"
 #include "support/test_harness.hpp"
@@ -216,6 +218,10 @@ PAKON_TEST(dry_run_prints_the_full_plan_and_never_opens) {
     EXPECT(dry.out.find("single idle read never ends a window") != std::string::npos);
     EXPECT(dry.out.find("no byte budget anywhere") != std::string::npos);
 
+    // The service wait's bounds and the interrupt path, also spelled out.
+    EXPECT(dry.out.find("60000 ms deadline") != std::string::npos);
+    EXPECT(dry.out.find("Ctrl+C") != std::string::npos);
+
     // Output paths.
     EXPECT(dry.out.find("/tmp/preflight-scan.calibration.pakraw") != std::string::npos);
     EXPECT(dry.out.find("/tmp/preflight-scan.film.pakraw") != std::string::npos);
@@ -232,5 +238,29 @@ PAKON_TEST(live_opens_exactly_once_and_a_failure_is_not_retried) {
     EXPECT_EQ(trap.calls, 1); // bounded: exactly one open attempt
     EXPECT(live.err.find("TRAP") != std::string::npos);
 }
+
+#ifndef _WIN32
+PAKON_TEST(interrupt_handler_latches_the_token_and_restores_default) {
+    // Blocker B, wiring half: the POSIX handler must latch the token
+    // (and nothing else — async-signal-safe by construction) and
+    // restore must hand SIGINT back to the default disposition, so the
+    // process never keeps a latch it no longer polls. Windows covers
+    // the same token through SetConsoleCtrlHandler; its console-event
+    // generation can't be raised safely from inside the test process,
+    // so only the platform-independent half is asserted here (the
+    // Windows branch compiles with the pakon-cli target).
+    const bool installed = cli::install_interrupt_handlers();
+    EXPECT(installed);
+    if (!installed) {
+        return;
+    }
+    cli::interrupt_token().reset();
+    std::raise(SIGINT);
+    EXPECT(cli::interrupt_token().requested());
+    cli::restore_interrupt_handlers();
+    cli::interrupt_token().reset();
+    EXPECT(!cli::interrupt_token().requested());
+}
+#endif
 
 int main() { return pakon::test::run_all(); }

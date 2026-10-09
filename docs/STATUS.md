@@ -59,7 +59,8 @@ not yet run against real hardware.
     Code 28 cold units) merged with `GUID_DEVINTERFACE_USB_DEVICE`
     (supplies `device_path` where a driver registered one); driver-independent,
     read-only. Hardware-ID recognition lives in platform-independent
-    `usb/identity.hpp`. WinUSB transport with 2 s pipe timeouts and
+    `usb/identity.hpp`. WinUSB transport with a 2 s deadline on every
+    pipe (0x01/0x81/0x86 — WinUSB's default is 0 = wait forever) and
     packet logging; `open_first` reports "discovered but not openable"
     honestly instead of "not detected".
   - Non-Windows stub so all protocol tests build and run anywhere.

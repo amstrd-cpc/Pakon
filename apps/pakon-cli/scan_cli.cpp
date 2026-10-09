@@ -13,6 +13,7 @@
 #include <string_view>
 #include <system_error>
 
+#include "interrupt.hpp"
 #include "pakon/image/completion.hpp"
 #include "pakon/image/raw_writer.hpp"
 #include "pakon/image/source.hpp"
@@ -396,6 +397,11 @@ void print_preflight(const Options& o, std::FILE* out) {
                  frame_hex(protocol::scan::read_service_status(addresses.light)).c_str());
     std::fprintf(out, "                   reports service-wanted (captured replies: idle 0103400800,\n");
     std::fprintf(out, "                   service-wanted 0103408802 - fixture provenance header)\n");
+    std::fprintf(out, "                   bounded: %lu ms deadline (capture: wanted 6.5 s after\n",
+                 scan::kServiceWaitTimeoutMs);
+    std::fprintf(out, "                   init), %lu ms cadence, progress logged; Ctrl+C ->\n",
+                 scan::kServicePollIntervalMs);
+    std::fprintf(out, "                   cancel at a bounded point, then best-effort teardown\n");
     std::fprintf(out, "planned frames:   init %zu, service %zu, calibration %zu, transport %zu,\n",
                  init.size(), service.size(), calibration.size(), transport.size());
     std::fprintf(out, "                   teardown %zu\n", teardown.size());
@@ -452,6 +458,7 @@ int run_live(const Options& o, const ScanCliDeps& deps, std::FILE* out, std::FIL
     config.plan.line_params = o.line_params;
     config.calibration_completion = make_calibration_policy(o);
     config.transport_completion = make_film_policy(o);
+    config.cancel = &interrupt_token();
 
     auto runner = scan::ScanRunner::create(config);
     if (!runner) {
@@ -463,23 +470,38 @@ int run_live(const Options& o, const ScanCliDeps& deps, std::FILE* out, std::FIL
 
     // ONE session, two channels: PPB commands (0x01/0x81) through the
     // allow-listed client, pixels (0x86) through the same transport.
+    // The image source carries the interrupt token too, so Ctrl+C is
+    // observed before each bulk read (within one pipe deadline).
     scan::PpbCommandChannel commands(*opened->client);
-    scan::UsbImageSource images(opened->client->transport());
+    scan::UsbImageSource images(opened->client->transport(), &interrupt_token());
 
     std::fprintf(out, "live scan: %s, calibration budget %zu rows, film end %s, "
                       "idle limit %zu reads\n",
                  o.config.c_str(), o.calibration_rows,
                  o.film_end == FilmEnd::rows ? "rows" : "quiescence", o.idle_reads);
 
+    // Interrupt handling spans exactly the runner: the handler latches
+    // the token, the runner observes it at bounded points and unwinds
+    // through the best-effort teardown + disconnect. Restored as soon
+    // as the run returns so a Ctrl+C during the file writes below
+    // terminates the process instead of being latched and ignored.
+    if (!install_interrupt_handlers()) {
+        std::fprintf(err,
+                     "warning: scan: interrupt handlers unavailable - Ctrl+C will "
+                     "not stop the run cleanly\n");
+    }
     auto result = (*runner)->run(commands, images);
+    restore_interrupt_handlers();
     if (!result) {
         std::fprintf(err, "error: scan: %s: %s\n",
                      std::string(to_string(result.error().kind)).c_str(),
                      result.error().message.c_str());
-        std::fprintf(err,
-                     "session state: %s (terminal fault - not retried; the best-effort "
-                     "teardown ran before this point)\n",
-                     std::string(scan::to_string((*runner)->session().state())).c_str());
+        std::fprintf(err, "session state: %s (terminal - not retried; %s)\n",
+                     std::string(scan::to_string((*runner)->session().state())).c_str(),
+                     (*runner)->teardown_attempted()
+                         ? "the best-effort teardown ran before this point"
+                         : "no teardown was attempted (fault before acquisition "
+                           "started)");
         return 1;
     }
 
@@ -567,9 +589,12 @@ void print_scan_usage(std::FILE* out) {
                  "  --film-rows <N>          film row budget (required with --film-end rows)\n"
                  "  --out-prefix <path>      writes <path>.calibration.pakraw and\n"
                  "                           <path>.film.pakraw (PAKRAW01 stream-raw)\n"
+                 "interrupts:       Ctrl+C during a live run stops at the next bounded\n"
+                 "                   point (at most one %lu ms pipe deadline) and runs\n"
+                 "                   the best-effort teardown before exiting\n"
                  "exit codes: 0 ok, 1 runtime failure, 2 usage error (usage errors are\n"
                  "decided before any device entry point - exit 2 means no USB traffic)\n",
-                 kMinIdleReads);
+                 kMinIdleReads, usb::kPipeTimeoutMs);
 }
 
 } // namespace pakon::cli

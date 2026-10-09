@@ -27,6 +27,7 @@ std::string_view to_string(ErrorKind kind) {
     case ErrorKind::image_bad_marker: return "image_bad_marker";
     case ErrorKind::image_no_completion_policy: return "image_no_completion_policy";
     case ErrorKind::image_bad_geometry: return "image_bad_geometry";
+    case ErrorKind::cancelled: return "cancelled";
     }
     return "unknown";
 }
