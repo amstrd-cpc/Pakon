@@ -141,6 +141,14 @@ struct Reply {
 // replies: ordinary ACK/poll status handling remains is_success().
 bool is_read_success(const Reply& reply);
 
+// READ_STATUS (poll) success. Poll statuses carry the same 0x80 event
+// bit as READ flags: `03 03 10 80 aa` in the capture corpus
+// (base4.jsonl event 498 — the documented "host event pending" reply)
+// and 0x88 on live HOST/light polls (lab unit 010-203-04, status run
+// 2026-10-09). Poll success therefore ignores the event bit, mirroring
+// is_read_success(); ACK handling stays is_success() exactly.
+bool is_poll_success(Status status);
+
 // Parse a reply, validating its form against the request type that
 // produced it. Returns:
 //   ppb_reply_too_short   — fewer than 4 bytes (no status byte present)

@@ -251,6 +251,44 @@ PAKON_TEST(ordinary_status_behavior_unchanged) {
     EXPECT(!pakon::ppb::is_read_success(*poll));
 }
 
+// --- Poll flags success predicate (is_poll_success) -------------------------
+//
+// Poll (READ_STATUS) statuses carry the 0x80 event bit like READ flags:
+// `03 03 10 80 aa` in the capture corpus (base4.jsonl event 498 — the
+// documented "host event pending" reply) and 0x88 on live HOST/light
+// polls (lab unit 010-203-04, status run 2026-10-09). is_poll_success()
+// mirrors is_read_success() for polls; is_success() is untouched.
+
+PAKON_TEST(poll_flags_ordinary_and_event_accepted) {
+    EXPECT(pakon::ppb::is_poll_success(Status::ok));      // 0x00
+    EXPECT(pakon::ppb::is_poll_success(Status::success_alt)); // 0x08
+    // Corpus event 498: event bit only, no success bit.
+    const auto corpus = pakon::ppb::parse_reply(hex("03031080aa"),
+                                                FrameType::read_status);
+    EXPECT(corpus.has_value());
+    EXPECT(pakon::ppb::is_poll_success(corpus->status));
+    // Live HOST poll 2026-10-09: the 6-byte count-4 form.
+    const auto host = pakon::ppb::parse_reply(hex("03041088aaaa"),
+                                              FrameType::read_status);
+    EXPECT(host.has_value());
+    EXPECT(pakon::ppb::is_poll_success(host->status));
+    // Live light poll 2026-10-09: ordinary 4-byte form, event bit set.
+    const auto light = pakon::ppb::parse_reply(hex("03024088"),
+                                               FrameType::read_status);
+    EXPECT(light.has_value());
+    EXPECT(pakon::ppb::is_poll_success(light->status));
+}
+
+PAKON_TEST(poll_flags_errors_rejected) {
+    EXPECT(!pakon::ppb::is_poll_success(Status::not_acknowledged));  // 0x01
+    EXPECT(!pakon::ppb::is_poll_success(Status::bus_error));         // 0x09
+    EXPECT(!pakon::ppb::is_poll_success(static_cast<Status>(0x89))); // event + error
+    // is_success() keeps its exact meaning — event-bit statuses stay
+    // invalid for the ordinary predicate.
+    EXPECT(!pakon::ppb::is_success(static_cast<Status>(0x80)));
+    EXPECT(!pakon::ppb::is_success(static_cast<Status>(0x88)));
+}
+
 // --- Rejections (safety and robustness) ------------------------------------
 
 PAKON_TEST(reject_type_zero_frame) {

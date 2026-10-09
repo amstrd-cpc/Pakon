@@ -77,11 +77,15 @@ Result<Reply> Client::exchange(const Frame& request) {
     }
 
     // READ replies carry flags, not an ordinary status: 0x08/0x88 are
-    // documented successes and must not be warned about. ACK/poll
-    // replies keep the original rule unchanged.
+    // documented successes and must not be warned about. READ_STATUS
+    // (poll) replies carry the same 0x80 event bit (docs/PPB.md; corpus
+    // event 498 = 0x80; live HOST/light polls 0x88 on 2026-10-09).
+    // ACK replies keep the original rule unchanged.
     const bool ok = reply->type == FrameType::read
                         ? is_read_success(*reply)
-                        : is_success(reply->status);
+                        : reply->type == FrameType::read_status
+                              ? is_poll_success(reply->status)
+                              : is_success(reply->status);
     if (!ok && reply->status != Status::not_acknowledged) {
         // not_acknowledged is a meaningful, expected answer to presence
         // probes (absent controller); everything else non-success is

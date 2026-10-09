@@ -64,6 +64,12 @@ does not fail the session. Any other error fails with state → `error`.
    (payload differs per unit/firmware; the OEM stack also writes PICL/
    PICM reg `0x03` = `01` immediately before each module-info read
    `base4.jsonl` events 145/154, which our sequence does not).
+   **Partly volatile (2026-10-09):** light bytes `[0..3]` changed to
+   `82 02 d4 01` on the next day while `[4..11]` stayed identical across
+   all three reads and the motor payload was byte-identical across both
+   days; today's prefix matches the same-session temperature read's
+   `82 02` shape (`82 02 d2 01`) — power-on temperature-like snapshot
+   `[SPECULATIVE]`, one supporting and one conflicting sample.
 4. **Bridge info** — READ HOST reg `0x03`, 2 bytes (capture-verified;
    observed `0f 03`; semantics unknown → shown as hex only).
 

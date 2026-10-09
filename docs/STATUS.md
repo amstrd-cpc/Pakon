@@ -197,8 +197,17 @@ full cold→warm boot ran on the lab unit and their outputs are recorded in
    corpus; both `0x88` and `0x08` accepted by `is_read_success`),
    completing `identify` as `Model: F-135+`. **The lab unit's
    module-info payloads differ entirely from the capture corpus**
-   (see UNKNOWN below). Status register reads (`0x83`, `0x84`, `0x88`)
-   still unrun — they execute with the `status` command.
+   (see UNKNOWN below).
+   **`status` run recorded 2026-10-09:** all 13 exchanges answered
+   (identify sequence + `03 01 10` → `03 04 10 88 aa aa`, `03 01 40` →
+   `03 02 40 88`, `03 01 44` → `03 02 44 08`, `01 03 40 01 83` →
+   `01 03 40 88 12`, `01 03 40 02 84` → `01 04 40 88 80 02`,
+   `01 03 40 04 88` → `01 06 40 88 82 02 d2 01`); values: host poll
+   `0x88`, light poll `0x88`, motor poll `0x08`, CCD `0x12`, light
+   status `80 02` (byte-identical to the corpus unit), temperature
+   payload `82 02 d2 01`. Poll event-bit statuses (`0x88`) exposed the
+   warn-gate gap → `is_poll_success()` added. Device responsive
+   throughout (identify re-run byte-identical at session start).
 6. Any claim that the driver-stack coexists with the running legacy
    software — assumed only, untested.
 7. ~~`pakon-cli probe` against the cold unit~~ — **recorded 2026-10-07:**
@@ -235,17 +244,34 @@ full cold→warm boot ran on the lab unit and their outputs are recorded in
   Live confirmation: `identify` now completes end-to-end.
 
 - **Module-info (`0x07`, 12 bytes) payload semantics — lab unit
-  diverges from the corpus.** Both captured replies (unit 16402) share
-  the layout `0f/10 .. 00 00 '12345' 00 00` with a 5-byte ASCII id at
-  `[5..9]`; the lab unit (010-203-04) answers the byte-identical request
-  with `04 20 40 12 04 c0 21 02 00 00 92 00` (light) /
-  `02 20 00 a0 00 8c 08 00 00 20 00 00` (motor) — no printable run,
-  `[3..4]`/`[10..11]` non-zero. Open: what each byte means on this
-  firmware, and whether it matters that the OEM stack writes PICL/PICM
-  reg `0x03` = `01` immediately before each module-info read
+  diverges from the corpus, and its light payload is partly volatile.**
+  Both captured replies (unit 16402) share the layout
+  `0f/10 .. 00 00 '12345' 00 00` with a 5-byte ASCII id at `[5..9]`; the
+  lab unit (010-203-04) answers the byte-identical request with
+  `04 20 40 12 04 c0 21 02 00 00 92 00` (light, 2026-10-08) /
+  `02 20 00 a0 00 8c 08 00 00 20 00 00` (motor) — no printable run.
+  **2026-10-09: the light bytes `[0..3]` changed to `82 02 d4 01` while
+  `[4..11]` stayed identical across all three reads, and the motor
+  payload is byte-identical across both days.** Today's prefix has the
+  same `82 02` shape as the same-session temperature read
+  (`82 02 d2 01`, u16 468 vs 466) — consistent with a power-on
+  temperature-like snapshot `[SPECULATIVE]`; 2026-10-08's
+  `04 20 40 12` does not fit that pattern (conflicting sample; was the
+  unit power-cycled between sessions? not recorded). Open: what each
+  byte means, and whether it matters that the OEM stack writes
+  PICL/PICM reg `0x03` = `01` immediately before each module-info read
   (`base4.jsonl` events 145/154) while our sequence does not. The
   decoder now shows only the capture-evidenced `[5..9]` window when it
   is printable, else raw hex — it never fabricates strings.
+- HOST poll reply on the lab unit is 6 bytes (`03 04 10 88 aa aa`,
+  count 4) vs the corpus 5-byte form — meaning of the second `0xaa` and
+  why the count differs `[UNKNOWN]`.
+- Status-register values: CCD `0x12` (corpus unit `0x00`), light status
+  `80 02` (= corpus), temperature payload `82 02 d2 01` — byte0 varies
+  across all observed readings (80/82/85), byte1 fixed `0x02`, u16 LE
+  = 466 here vs 312–314 in captures; deci-°C (46.6 °C vs 31.2–31.4 °C)
+  plausible `[INFERRED]` from drift/variation, unproven; bit meanings
+  `[UNKNOWN]`.
 - HOST reg `0x03` bridge-info semantics (observed `0f 03`).
 - Whether reading `0x88` (temperature) is valid on F-135 (non-Plus).
 - Exact meaning of WRITE/CMD `data[1]` byte: "payload length" vs

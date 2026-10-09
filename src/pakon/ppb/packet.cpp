@@ -49,6 +49,16 @@ bool is_read_success(const Reply& reply) {
     return (flags & 0x7F) == 0x08;
 }
 
+bool is_poll_success(Status status) {
+    // Valid poll statuses: 0x00/0x08 successes with the 0x80 event bit
+    // optionally set (corpus event 498: 0x80; live HOST/light polls
+    // 2026-10-09: 0x88). Anything else — including error codes with the
+    // event bit (0x89) — stays rejected.
+    const auto base = static_cast<std::uint8_t>(status) & 0x7FU;
+    return base == static_cast<std::uint8_t>(Status::ok) ||
+           base == static_cast<std::uint8_t>(Status::success_alt);
+}
+
 Result<std::vector<std::uint8_t>> Frame::serialize() const {
     if (data.empty()) {
         return failure<std::vector<std::uint8_t>>(

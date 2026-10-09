@@ -66,7 +66,10 @@ std::string_view to_string(State state);
 // layout from the same request:
 //   PICL+  04 20 40 12 04 c0 21 02 00 00 92 00
 //   PICM+  02 20 00 a0 00 8c 08 00 00 20 00 00
-// so the semantics of every byte remain [UNKNOWN] beyond the capture-
+// and the light bytes [0..3] are not stable across days (2026-10-09:
+// 82 02 d4 01 — matching the same-session temperature read's 82 02
+// shape) while [4..11] and the motor payload stay byte-identical.
+// So the semantics of every byte remain [UNKNOWN] beyond the capture-
 // evidenced ASCII window.
 struct ModuleInfo {
     std::array<std::uint8_t, 12> raw{};

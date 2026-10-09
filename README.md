@@ -144,9 +144,10 @@ Layering rules (who may call whom, and what each layer may emit) are in
 | **Descriptor scan, 2026-10-08** | `descriptors` — device descriptor byte-identical to the Pakon7 image @ `0x1000`; 1 vendor interface, bulk `0x01`/`0x81`/`0x86` @ 512; strings incl. serial `010-203-04`; interface path carries this repo's GUID | docs/F135_TOPOLOGY.md |
 | **First PPB session, 2026-10-08** | `identify` — connect handshake + probes `0x44`/`0x24` answered; module-info reply well-formed (12 B) but `0x88` READ-flags byte rejected by `is_success` → stopped (payload uninterpreted) | docs/STATUS.md |
 | **identify complete, 2026-10-08** | after `254e8a1` (`is_read_success`): all 7 exchanges answered — `0x40` module-info `0x88`, `0x44` module-info `0x08`, bridge `0x10` `0x88` → `Model: F-135+`; lab unit's module-info payload differs entirely from the capture corpus (decoded: raw hex only) | docs/SCANNER.md § 3 |
+| **status complete, 2026-10-09** | `status` — all 13 exchanges answered; polls revealed the `0x80` event bit on READ_STATUS (`0x88` on HOST/light) and a 6-byte HOST poll form; values: CCD `0x12`, light status `80 02` (= corpus), temperature `82 02 d2 01`; light module-info `[0..3]` changed vs 10-08 (volatile field); device responsive throughout → `is_poll_success()` added | docs/STATUS.md |
 
-Not yet run on hardware: the CLI's `list` and `status` commands. (`attrib`,
-`descriptors` and `identify` ran 2026-10-08 — see
+Not yet run on hardware: the CLI's `list` command. (`attrib`,
+`descriptors`, `identify` and `status` ran 2026-10-08/09 — see
 [docs/STATUS.md](docs/STATUS.md) and [docs/F135_TOPOLOGY.md](docs/F135_TOPOLOGY.md).)
 
 ## External references

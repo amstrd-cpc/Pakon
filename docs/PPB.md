@@ -51,6 +51,7 @@ cannot hold it) and `Frame::parse()` rejects it from the wire.
 | CMD `0x04` / WRITE `0x02` | `07 02 <addr> <status>` |
 | READ_STATUS `0x03`, controllers | `03 02 <addr> <status>` |
 | READ_STATUS `0x03`, HOST `0x10` | `03 03 10 <status> <0xaa>` (5 bytes) |
+| READ_STATUS `0x03`, HOST, live lab unit 2026-10-09 | `03 04 10 <status> <0xaa> <0xaa>` (6 bytes, count 4; second `0xaa` `[UNKNOWN]`) |
 | READ `0x01` | `01 <2+n> <addr> <flags> <n payload bytes>` |
 
 - Reply type mirrors request type `[CONFIRMED on hardware, August 2026]`;
@@ -58,6 +59,10 @@ cannot hold it) and `Frame::parse()` rejects it from the wire.
 - The 5-byte HOST poll form (trailing constant `0xaa`, status `0x80` = host
   event pending) is **capture evidence** — pakon-reference documents only the
   4-byte controller form. Observed 8037:1 ordinary:event in one session.
+  Poll statuses carry the `0x80` event bit exactly like READ flags:
+  the lab unit's HOST and light polls answered `0x88` on 2026-10-09.
+  `is_poll_success()` ignores the event bit for success, mirroring
+  `is_read_success()`; ACK handling stays `is_success()`.
 - READ flags byte: `0x08` ordinary, `0x88` (= `0x08 | 0x80`) event pending
   `[CONFIRMED]`; observed 2657:1 in captures. `Reply::event_pending()` exposes
   the bit.
@@ -73,7 +78,11 @@ cannot hold it) and `Frame::parse()` rejects it from the wire.
 with `is_read_success(Reply)` instead: flags `0x08` and `0x88` accepted
 (the `0x80` event bit ignored for success, still reported by
 `event_pending()`), every other flags byte rejected, non-READ replies
-declined — ordinary status handling stays `is_success()`.
+declined — ordinary status handling stays `is_success()`. READ_STATUS
+(poll) replies are checked with `is_poll_success(Status)`: `0x00`/`0x08`
+accepted with the `0x80` event bit optionally set (corpus event 498 =
+`0x80`; live HOST/light polls = `0x88`, 2026-10-09), errors and error +
+event combinations rejected.
 
 ## Session client (`ppb::Client`)
 
