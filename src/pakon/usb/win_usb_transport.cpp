@@ -12,6 +12,9 @@
 
 #include "pakon/usb/transport.hpp"
 #include "pakon/usb/win_usb_open.hpp"
+// image::kImageEndpoint: the pipe deadline below must also cover the
+// image pipe, and this header is its single source of truth.
+#include "pakon/image/source.hpp"
 #include "pakon/logging/logger.hpp"
 
 #include <windows.h>
@@ -239,12 +242,27 @@ private:
         : info_(std::move(info)), device_(device), usb_(usb) {}
 
     void apply_timeouts() {
-        // Generous per-transfer timeouts; callers may tighten later.
-        ULONG timeout_ms = 2000;
-        WinUsb_SetPipePolicy(usb_, kCommandOutEndpoint, PIPE_TRANSFER_TIMEOUT,
-                             sizeof(timeout_ms), &timeout_ms);
-        WinUsb_SetPipePolicy(usb_, kCommandInEndpoint, PIPE_TRANSFER_TIMEOUT,
-                             sizeof(timeout_ms), &timeout_ms);
+        // The deadline covers every pipe this transport can read or
+        // write - the command pair AND the image stream endpoint.
+        // WinUSB's default is 0 = wait indefinitely, so an image read
+        // with no policy blocks forever the moment the device stops
+        // feeding (no usb_timeout, no idle tick, quiescence never
+        // fires); see kPipeTimeoutMs in usb/transport.hpp. A policy
+        // failure is logged, not fatal - same tolerance the command
+        // pipes always had.
+        ULONG timeout_ms = kPipeTimeoutMs;
+        const std::uint8_t pipes[] = {kCommandOutEndpoint, kCommandInEndpoint,
+                                      image::kImageEndpoint};
+        for (const std::uint8_t pipe : pipes) {
+            if (!WinUsb_SetPipePolicy(usb_, pipe, PIPE_TRANSFER_TIMEOUT,
+                                       sizeof(timeout_ms), &timeout_ms)) {
+                const auto error = GetLastError();
+                log::Logger::instance().log(
+                    log::Level::warn,
+                    "SetPipePolicy(PIPE_TRANSFER_TIMEOUT) on endpoint 0x{:02x} failed: {}",
+                    pipe, error);
+            }
+        }
     }
 
     DeviceInfo info_;

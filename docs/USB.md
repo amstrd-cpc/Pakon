@@ -147,7 +147,7 @@ Backends:
 
 | Backend | Platforms | State |
 |---|---|---|
-| `WinUsbTransport` | Windows | implemented: SetupAPI + WinUSB, 2 s pipe timeouts, TX/RX hex logging |
+| `WinUsbTransport` | Windows | implemented: SetupAPI + WinUSB, 2 s deadline on every pipe (`kPipeTimeoutMs`: 0x01/0x81/0x86 — WinUSB's default is 0 = wait forever), TX/RX hex logging |
 | non-Windows stub | Linux/macOS | enumeration empty, `open_first` → `usb_not_supported` (protocol tests still run) |
 | libusb | Linux/macOS | future, drops in behind `IUsbTransport` |
 

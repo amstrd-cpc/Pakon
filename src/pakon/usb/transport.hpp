@@ -35,6 +35,21 @@ inline constexpr std::uint16_t kWarmPidF335 = 0xf335;
 inline constexpr std::uint8_t kCommandOutEndpoint = 0x01;
 inline constexpr std::uint8_t kCommandInEndpoint = 0x81;
 
+// Per-transfer deadline for EVERY pipe of an open session
+// (WinUsbTransport::apply_timeouts): command OUT 0x01, command IN
+// 0x81, image IN 0x86 (image::kImageEndpoint). WinUSB's default
+// PIPE_TRANSFER_TIMEOUT is 0 = wait indefinitely: with no explicit
+// policy a device that stops feeding 0x86 blocks WinUsb_ReadPipe
+// forever, no usb_timeout surfaces, no idle tick is produced, and the
+// quiescence policy (image/completion.hpp) can never fire - the scan
+// would hang with the lamp on. With the deadline a stopped device
+// costs one usb_timeout, which scan/transport.hpp maps to exactly one
+// idle tick: a pause merely increments the idle counter (reset by the
+// next data), so --idle-reads N (>= 2 enforced) waits
+// N * kPipeTimeoutMs of real silence before a window ends - a single
+// transient timeout can never end a scan.
+inline constexpr unsigned long kPipeTimeoutMs = 2000;
+
 // The image stream rides "a separate bulk IN endpoint" whose number is NOT
 // stated in pakon-reference; it must be read from the device's endpoint
 // descriptors at enumeration (image-stream.md: endpoint max packet 512,

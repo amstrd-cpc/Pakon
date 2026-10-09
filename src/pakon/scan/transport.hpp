@@ -47,7 +47,10 @@ private:
 // never errors and never end-of-stream: on live hardware a device
 // that has stopped feeding simply stops answering, and window
 // completion for that case is the quiescence policy's job
-// (image/completion.hpp). Non-timeout transport failures propagate.
+// (image/completion.hpp). The live backend's read deadline is
+// usb::kPipeTimeoutMs, applied as WinUSB pipe policy for endpoint
+// 0x86 at open (usb/win_usb_transport.cpp) — WinUSB's default is no
+// timeout at all. Non-timeout transport failures propagate.
 //
 // Nothing in the offline test suite constructs this class; tests use
 // image/source.hpp's scripted sources instead. Endpoint 0x86 is

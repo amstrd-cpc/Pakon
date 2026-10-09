@@ -3,7 +3,10 @@
 //   - WinUSB INF consistency (GUID pinned to the C++ constant);
 //   - WinUSB open parameters (win_usb_open.hpp): the overlapped flag and
 //     both source open sites sharing one header (regression for the
-//     2026-10-07 ERROR_INVALID_HANDLE discrepancy).
+//     2026-10-07 ERROR_INVALID_HANDLE discrepancy);
+//   - pipe deadlines (usb/transport.hpp): every pipe — command pair AND
+//     image IN 0x86 — gets PIPE_TRANSFER_TIMEOUT (WinUSB's default of
+//     0 = wait forever would block image reads indefinitely).
 //
 // Vectors are grounded in evidence, not invented:
 //   - "USB\VID_0F05&PID_F235&REV_::07" and the device instance
@@ -259,6 +262,36 @@ PAKON_TEST(winusb_open_sites_share_one_params_header) {
         EXPECT(text.find("kWinUsbOpenParams") != std::string::npos);
         EXPECT(text.find("FILE_ATTRIBUTE_NORMAL") == std::string::npos);
     }
+}
+
+PAKON_TEST(winusb_pipe_deadline_covers_image_endpoint) {
+    // Live-scan audit blocker (2026-10-09): WinUSB's default
+    // PIPE_TRANSFER_TIMEOUT is 0 = wait indefinitely, and
+    // apply_timeouts() used to set the policy on the command pair
+    // only. It must ALSO cover the image endpoint 0x86: with no
+    // deadline, WinUsb_ReadPipe(0x86) blocks forever when the device
+    // stops feeding, no usb_timeout reaches scan/transport.hpp, no
+    // idle tick is produced, and --film-end quiescence could never
+    // complete - a hang with the lamp on. Source-level pin, same
+    // technique as the open-sites test above.
+    EXPECT_EQ(pakon::usb::kPipeTimeoutMs, 2000ul);
+
+    std::ifstream source(std::string(PAKON_SOURCE_DIR) +
+                         "/src/pakon/usb/win_usb_transport.cpp");
+    EXPECT(source.good());
+    if (!source) {
+        return;
+    }
+    std::stringstream contents;
+    contents << source.rdbuf();
+    const std::string text = contents.str();
+
+    EXPECT(text.find("PIPE_TRANSFER_TIMEOUT") != std::string::npos);
+    EXPECT(text.find("image::kImageEndpoint") != std::string::npos);
+    // The --idle-reads wait is computed from this value: the backend
+    // must read the shared constant, never fork its own literal.
+    EXPECT(text.find("kPipeTimeoutMs") != std::string::npos);
+    EXPECT(text.find("timeout_ms = 2000") == std::string::npos);
 }
 
 int main() {

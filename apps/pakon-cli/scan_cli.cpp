@@ -385,6 +385,9 @@ void print_preflight(const Options& o, std::FILE* out) {
     std::fprintf(out, "  timeout rule:    a single idle read never ends a window\n");
     std::fprintf(out, "                   (--idle-reads >= %zu enforced); no byte budget anywhere\n",
                  kMinIdleReads);
+    std::fprintf(out, "  idle deadline:   %lu ms per image IN 0x%02x read (pipe policy set at\n",
+                 usb::kPipeTimeoutMs, image::kImageEndpoint);
+    std::fprintf(out, "                   open) -> quiescence waits idle-reads x deadline\n");
     std::fprintf(out, "outputs:\n");
     std::fprintf(out, "  calibration W1:  %s\n", (o.out_prefix + ".calibration.pakraw").c_str());
     std::fprintf(out, "  film W2:         %s\n", (o.out_prefix + ".film.pakraw").c_str());
