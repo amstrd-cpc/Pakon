@@ -5,6 +5,7 @@ namespace pakon {
 std::string_view to_string(ErrorKind kind) {
     switch (kind) {
     case ErrorKind::unknown: return "unknown";
+    case ErrorKind::io_failure: return "io_failure";
     case ErrorKind::usb_device_not_found: return "usb_device_not_found";
     case ErrorKind::usb_open_failed: return "usb_open_failed";
     case ErrorKind::usb_io_failed: return "usb_io_failed";
@@ -24,6 +25,8 @@ std::string_view to_string(ErrorKind kind) {
     case ErrorKind::calibration_bad_header: return "calibration_bad_header";
     case ErrorKind::image_truncated: return "image_truncated";
     case ErrorKind::image_bad_marker: return "image_bad_marker";
+    case ErrorKind::image_no_completion_policy: return "image_no_completion_policy";
+    case ErrorKind::image_bad_geometry: return "image_bad_geometry";
     }
     return "unknown";
 }

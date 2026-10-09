@@ -2,6 +2,8 @@
 #
 # Layering (top depends on bottom):
 #   scanner → ppb → usb
+#   scan → image, protocol, ppb  (session plans + image reception; no I/O
+#   in session/plan, interfaces only in transport/runner)
 #   bootstrap → usb   (cold-device read-only probe; no PPB involvement)
 #   all layers use errors/ and logging/
 # protocol/ is header-only constants, documented against pakon-reference.
@@ -14,6 +16,12 @@ set(PAKON_CORE_SOURCES
     ppb/packet.cpp
     ppb/client.cpp
     scanner/scanner.cpp
+    scan/session.cpp
+    scan/plan.cpp
+    scan/runner.cpp
+    image/row_sync.cpp
+    image/reader.cpp
+    image/raw_writer.cpp
 )
 
 if(WIN32)

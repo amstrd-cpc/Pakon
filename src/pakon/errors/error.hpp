@@ -27,6 +27,7 @@ namespace pakon {
 enum class ErrorKind {
     // Generic
     unknown,
+    io_failure,          // host-side file I/O (raw image output)
 
     // USB transport layer
     usb_device_not_found,
@@ -56,6 +57,8 @@ enum class ErrorKind {
     // Image layer
     image_truncated,
     image_bad_marker,
+    image_no_completion_policy, // scan window configured without a completion policy
+    image_bad_geometry,         // row window/geometry cannot hold the requested layout
 };
 
 // A single error: what went wrong and optionally why (device message,
