@@ -1,30 +1,30 @@
-// Read-only descriptor discovery — standard GET_DESCRIPTOR reads plus
+// Read-only descriptor discovery - standard GET_DESCRIPTOR reads plus
 // WinUSB local descriptor queries.
 //
 // Discovery reuses the shared two-pass enumeration (usb/enumerate_win.cpp:
 // PnP devnode + registered interface, identity rules from
 // usb/identity.hpp) to locate the booted F135; nothing is opened for
 // that step. The scan then opens the device with the shared,
-// hardware-proven WinUSB open parameters (usb/win_usb_open.hpp — same
+// hardware-proven WinUSB open parameters (usb/win_usb_open.hpp - same
 // overlapped CreateFile as the transport and `list`) and reads:
 //
-//   1. GET_DESCRIPTOR(DEVICE)         — 18 raw bytes (WinUsb_GetDescriptor);
-//   2. GET_DESCRIPTOR(CONFIGURATION)  — 9-byte peek for wTotalLength, then
+//   1. GET_DESCRIPTOR(DEVICE)         - 18 raw bytes (WinUsb_GetDescriptor);
+//   2. GET_DESCRIPTOR(CONFIGURATION)  - 9-byte peek for wTotalLength, then
 //                                       the full tree;
 //   3. the string descriptors those reference (GET_DESCRIPTOR(STRING));
-//   4. WinUsb_QueryDeviceInformation(DEVICE_SPEED) — driver-side state,
+//   4. WinUsb_QueryDeviceInformation(DEVICE_SPEED) - driver-side state,
 //      no wire traffic;
 //   5. QueryInterfaceSettings / QueryPipe over the primary and every
-//      associated interface — an independent topology cross-check.
+//      associated interface - an independent topology cross-check.
 //
 // Note: the WinUSB API exposes no bConfigurationValue read (there is no
 // WinUsb_GetConfiguration); the report records that a configuration is
-// active implicitly — WinUsb_Initialize only succeeds on one.
+// active implicitly - WinUsb_Initialize only succeeds on one.
 //
 // Safety (see also the header): WinUsb_GetDescriptor issues only
 // standard GET_DESCRIPTOR requests (bmRequestType 0x80/0x82). No vendor
-// control transfer (0xA0/0xA3/0xA4/0xA9 family), no WinUsb_Set* — no
-// configuration change, no alt-setting switch, no pipe-policy change —
+// control transfer (0xA0/0xA3/0xA4/0xA9 family), no WinUsb_Set* - no
+// configuration change, no alt-setting switch, no pipe-policy change -
 // no reset, no bulk traffic, no firmware upload. The handle is closed
 // immediately afterwards; the device is left exactly as found.
 
@@ -53,7 +53,7 @@ constexpr UCHAR kDescriptorString = 0x03;
 constexpr UCHAR kDescriptorInterface = 0x04;
 constexpr UCHAR kDescriptorEndpoint = 0x05;
 
-// Plausibility cap for wTotalLength — a real F135 configuration is tens
+// Plausibility cap for wTotalLength - a real F135 configuration is tens
 // of bytes; anything absurd indicates a malformed read, not a descriptor.
 constexpr std::size_t kMaxConfigBytes = 8192;
 
@@ -81,7 +81,7 @@ std::string hex_byte(std::uint8_t value) {
 }
 
 // USB string descriptor payload (UTF-16LE, starting after the 2-byte
-// header) → UTF-8. BMP characters and surrogate pairs are handled; an
+// header) -> UTF-8. BMP characters and surrogate pairs are handled; an
 // unpaired surrogate decodes as U+FFFD (never a crash, never a lie).
 std::string utf16le_to_utf8(const std::uint8_t* data, std::size_t bytes) {
     auto emit = [](std::string& out, std::uint32_t codepoint) {
@@ -130,7 +130,7 @@ std::string utf16le_to_utf8(const std::uint8_t* data, std::size_t bytes) {
     return out;
 }
 
-// USBD_PIPE_TYPE → bmAttributes low bits (matches the wire encoding:
+// USBD_PIPE_TYPE -> bmAttributes low bits (matches the wire encoding:
 // control 0, isochronous 1, bulk 2, interrupt 3). If-chains instead of
 // a switch to keep /W4 quiet about enum coverage on both toolchains.
 std::uint8_t attributes_from_pipe_type(USBD_PIPE_TYPE pipe_type) {
@@ -231,7 +231,7 @@ void parse_config_tree(const std::vector<std::uint8_t>& bytes,
                         std::to_string(pos) +
                         " precedes any interface descriptor";
                 }
-                // keep walking — the chain itself is still well-formed
+                // keep walking - the chain itself is still well-formed
             } else {
                 DescriptorEndpoint endpoint;
                 endpoint.address = bytes[pos + 2];
@@ -298,7 +298,7 @@ std::vector<std::uint8_t> get_descriptor(WINUSB_INTERFACE_HANDLE usb,
 }
 
 // Walk every alternate setting of one interface handle and record its
-// endpoints (WinUSB's view of the topology — independent of the raw
+// endpoints (WinUSB's view of the topology - independent of the raw
 // descriptor parse).
 void walk_interface(WINUSB_INTERFACE_HANDLE handle,
                     std::vector<DescriptorInterface>& out,
@@ -366,7 +366,7 @@ DescriptorScan scan_pakon_descriptors() {
     DescriptorScan report;
     report.supported = true;
 
-    // 1 — locate the booted F135 (identity rules over the present list;
+    // 1 - locate the booted F135 (identity rules over the present list;
     // this step performs no I/O). Cold F235 units are intentionally out
     // of scope for this diagnostic.
     const std::vector<DeviceInfo> devices = enumerate_pakon();
@@ -385,7 +385,7 @@ DescriptorScan scan_pakon_descriptors() {
     if (!target) {
         report.error =
             cold_present
-                ? "no booted F135 present — the attached Pakon unit is "
+                ? "no booted F135 present - the attached Pakon unit is "
                   "the cold 0F05:F235 bootstrap identity (this "
                   "diagnostic only scans the booted 0F05:F135 runtime)"
                 : other_present
@@ -407,7 +407,7 @@ DescriptorScan scan_pakon_descriptors() {
     }
     report.device_path = target->device_path;
 
-    // 2 — open with the shared, hardware-proven WinUSB parameters.
+    // 2 - open with the shared, hardware-proven WinUSB parameters.
     HANDLE file = open_device(report.device_path, report.open_mode,
                               report.error);
     if (file == INVALID_HANDLE_VALUE) {
@@ -420,7 +420,7 @@ DescriptorScan scan_pakon_descriptors() {
         return report;
     }
 
-    // 3 — GET_DESCRIPTOR(DEVICE): raw bytes + standard fields.
+    // 3 - GET_DESCRIPTOR(DEVICE): raw bytes + standard fields.
     {
         std::string stage_error;
         auto bytes = get_descriptor(usb, kDescriptorDevice, 0, 0, 18,
@@ -449,7 +449,7 @@ DescriptorScan scan_pakon_descriptors() {
         }
     }
 
-    // 4 — GET_DESCRIPTOR(CONFIGURATION): 9-byte peek for wTotalLength,
+    // 4 - GET_DESCRIPTOR(CONFIGURATION): 9-byte peek for wTotalLength,
     // then the full tree; parse it into the interface topology.
     {
         std::string stage_error;
@@ -487,8 +487,8 @@ DescriptorScan scan_pakon_descriptors() {
         }
     }
 
-    // 4b — driver-side context (no wire traffic): link speed. (The WinUSB
-    // API has no bConfigurationValue read — an active configuration is
+    // 4b - driver-side context (no wire traffic): link speed. (The WinUSB
+    // API has no bConfigurationValue read - an active configuration is
     // implied by WinUsb_Initialize having succeeded above.)
     {
         ULONG length = static_cast<ULONG>(sizeof(UCHAR));
@@ -498,7 +498,7 @@ DescriptorScan scan_pakon_descriptors() {
             // WinUSB's DEVICE_SPEED encoding is NOT the USB_DEVICE_SPEED
             // enum: per Microsoft's WinUsb_QueryDeviceInformation docs,
             // 0x01 = low/full speed, 0x03 = high speed or above (the
-            // lab unit returned 0x03 — matches its 512-byte bulk
+            // lab unit returned 0x03 - matches its 512-byte bulk
             // endpoints and bcdUSB 0200).
             report.link_speed_known = true;
             report.link_speed = speed == 1 ? "low or full (code 0x01)"
@@ -507,7 +507,7 @@ DescriptorScan scan_pakon_descriptors() {
         }
     }
 
-    // 6 — string descriptors referenced by what we read (deduplicated,
+    // 6 - string descriptors referenced by what we read (deduplicated,
     // index 0 = language list never requested as a payload). Standard
     // GET_DESCRIPTOR(STRING) only; a failed index is reported, not
     // retried with other languages beyond one documented fallback.
@@ -563,7 +563,7 @@ DescriptorScan scan_pakon_descriptors() {
         }
     }
 
-    // 7 — independent topology walk through WinUSB: primary interface
+    // 7 - independent topology walk through WinUSB: primary interface
     // plus every associated interface, all alternate settings, all pipes.
     walk_interface(usb, report.winusb_interfaces, report.winusb_walk_error);
     for (UCHAR index = 0;; ++index) {

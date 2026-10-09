@@ -1,4 +1,4 @@
-// pakon-cli — command-line diagnostics for the Pakon F-X35 scanner stack.
+// pakon-cli - command-line diagnostics for the Pakon F-X35 scanner stack.
 //
 // Commands (Phase 1-4 scope + bootstrap probe + diagnostics + scan):
 //   list                 enumerate attached Pakon scanners (no I/O sent)
@@ -12,7 +12,7 @@
 //                        personality), no bulk traffic, no writes
 //   identify             open PPB session, presence probes, module info
 //   status               identify + status polls and read-only registers
-//   scan                 capture a scan session — explicit opt-in only:
+//   scan                 capture a scan session - explicit opt-in only:
 //                        --dry-run prints the plan with NO device opened;
 //                        --live-scan executes over one warm session
 //                        (scan_cli.hpp carries the full safety rules)
@@ -47,7 +47,7 @@ void print_error(const pakon::Error& error) {
 
 void print_usage() {
     std::puts(
-        "pakon-cli — Pakon F-X35 scanner tools\n"
+        "pakon-cli - Pakon F-X35 scanner tools\n"
         "\n"
         "usage: pakon-cli [--log LEVEL] <command>\n"
         "\n"
@@ -60,12 +60,12 @@ void print_usage() {
         "  descriptors report the booted F135's full USB topology\n"
         "             (device + configuration descriptor bytes, every\n"
         "             interface/alt setting/endpoint, referenced strings;\n"
-        "             standard GET_DESCRIPTOR reads + WinUSB queries only —\n"
+        "             standard GET_DESCRIPTOR reads + WinUSB queries only -\n"
         "             no vendor request, no reset, no reconfiguration;\n"
         "             see docs/F135_TOPOLOGY.md)\n"
         "  probe      read-only bootstrap probe: stage-1 personality read\n"
         "             (works on cold devices; the only I/O it sends is one\n"
-        "             documented vendor control read — see docs/BOOTSTRAP.md)\n"
+        "             documented vendor control read - see docs/BOOTSTRAP.md)\n"
         "  identify   open the PPB session and identify the scanner model\n"
         "  status     identify, then poll status registers (read-only)\n"
         "\n");
@@ -93,7 +93,7 @@ int cmd_list() {
         std::printf("Pakon F-X35 detected\n\n");
         std::printf("VID: %04x\n", device.vendor_id);
         std::printf("PID: %04x%s\n", device.product_id,
-                    device.is_cold() ? "  (cold/bootstrap — firmware not loaded)"
+                    device.is_cold() ? "  (cold/bootstrap - firmware not loaded)"
                                      : "  (operational)");
         std::printf("Serial: %s\n",
                     device.serial_number ? device.serial_number->c_str() : "n/a");
@@ -106,13 +106,13 @@ int cmd_list() {
         if (device.has_device_interface()) {
             std::printf("Device path: %s\n", device.device_path.c_str());
         } else {
-            std::puts("Device path: (none — no function-driver interface; "
+            std::puts("Device path: (none - no function-driver interface; "
                       "discovered via PnP, not openable)");
         }
 
         if (device.interfaces.empty()) {
             std::printf("Interfaces: unavailable%s%s\n",
-                        device.interface_note.empty() ? "" : " — ",
+                        device.interface_note.empty() ? "" : " - ",
                         device.interface_note.c_str());
             std::printf("\n"
                         "Note: F-135 and F-135+ are indistinguishable by USB "
@@ -143,8 +143,8 @@ int cmd_list() {
     return 0;
 }
 
-// Read-only PnP/driver attribution (docs/BOOT_CHAIN.md § 6): property
-// queries over the present device list — no device is opened, no USB
+// Read-only PnP/driver attribution (docs/BOOT_CHAIN.md sec. 6): property
+// queries over the present device list - no device is opened, no USB
 // traffic is sent, no driver state is modified.
 int cmd_attrib() {
     if (!pakon::usb::driver_attribution_supported()) {
@@ -210,7 +210,7 @@ int cmd_attrib() {
     return 0;
 }
 
-// bmAttributes low bits → transfer type name (USB spec encoding).
+// bmAttributes low bits -> transfer type name (USB spec encoding).
 const char* transfer_name(std::uint8_t attributes) {
     const std::uint8_t type = attributes & 0x03;
     return type == 0 ? "control"
@@ -230,10 +230,10 @@ void print_hex_bytes(const std::vector<std::uint8_t>& bytes) {
     }
 }
 
-// One topology section: every interface → alternate setting → endpoint
+// One topology section: every interface -> alternate setting -> endpoint
 // with direction, transfer type, packet size (raw + low 11 bits) and
 // raw bInterval (the encoding differs per transfer type and is not
-// decoded here — raw bytes only, per the project's no-invention rule).
+// decoded here - raw bytes only, per the project's no-invention rule).
 void print_topology(const std::vector<pakon::usb::DescriptorInterface>& interfaces,
                     const char* title) {
     std::puts(title);
@@ -266,7 +266,7 @@ void print_topology(const std::vector<pakon::usb::DescriptorInterface>& interfac
 // Standard GET_DESCRIPTOR reads (device/configuration/string) plus local
 // WinUSB queries only: no vendor control request (0xA0/0xA3/0xA4/0xA9
 // never touched), no firmware upload, no USB reset, no configuration
-// change — the device is left exactly as found.
+// change - the device is left exactly as found.
 int cmd_descriptors() {
     if (!pakon::usb::descriptor_scan_supported()) {
         std::fprintf(stderr,
@@ -296,7 +296,7 @@ int cmd_descriptors() {
     if (report.link_speed_known) {
         std::printf("  link speed:     %s\n", report.link_speed.c_str());
     }
-    std::puts("  configuration:  active (implied — WinUsb_Initialize "
+    std::puts("  configuration:  active (implied - WinUsb_Initialize "
               "succeeded;\n                  the WinUSB API exposes no "
               "bConfigurationValue read)");
     std::puts("");
@@ -338,12 +338,12 @@ int cmd_descriptors() {
                     report.bm_attributes, report.max_power,
                     report.max_power * power_unit, power_unit);
         if (report.b_num_configurations > 1) {
-            std::puts("  note: bNumConfigurations > 1 — only configuration 0");
+            std::puts("  note: bNumConfigurations > 1 - only configuration 0");
             std::puts("        was read; selecting another configuration would");
             std::puts("        reconfigure the device and is NOT done here.");
         }
         if (!report.config_parse_error.empty()) {
-            std::printf("  parse: first anomaly — %s\n",
+            std::printf("  parse: first anomaly - %s\n",
                         report.config_parse_error.c_str());
         }
         std::puts("  raw:");
@@ -360,7 +360,7 @@ int cmd_descriptors() {
     std::puts("");
     print_topology(report.winusb_interfaces,
                    "INTERFACES (WinUSB query: QueryInterfaceSettings / "
-                   "QueryPipe — cross-check)");
+                   "QueryPipe - cross-check)");
     if (!report.winusb_walk_error.empty()) {
         std::printf("  walk note: %s\n", report.winusb_walk_error.c_str());
     }
@@ -381,7 +381,7 @@ int cmd_descriptors() {
         }
     }
     std::puts("");
-    std::puts("(Read-only: standard descriptor reads + WinUSB queries only —");
+    std::puts("(Read-only: standard descriptor reads + WinUSB queries only -");
     std::puts(" no vendor control request, no firmware upload, no USB reset,");
     std::puts(" no configuration change; the device was left as found.)");
     std::puts("Interpretation and evidence labels: docs/F135_TOPOLOGY.md");
@@ -391,7 +391,7 @@ int cmd_descriptors() {
 int cmd_probe() {
     // Explicit cold_ok: the probe's whole purpose is the cold stage-1
     // loader. It performs exactly one read-only vendor control request
-    // (bootstrap::probe — pinned in tests/bootstrap/probe_test.cpp); no
+    // (bootstrap::probe - pinned in tests/bootstrap/probe_test.cpp); no
     // bulk traffic, no control writes, no PPB frames. Evidence and safety
     // analysis: docs/BOOTSTRAP.md.
     auto transport = pakon::usb::open_first(/*cold_ok=*/true);
@@ -402,7 +402,7 @@ int cmd_probe() {
 
     const auto& info = (*transport)->device_info();
     std::printf("State: %s\n", info.is_cold()
-                    ? "cold/bootstrap (0f05:f235) — firmware not loaded"
+                    ? "cold/bootstrap (0f05:f235) - firmware not loaded"
                     : "warm/operational");
     std::printf("VID: %04x  PID: %04x\n", info.vendor_id, info.product_id);
     if (!info.hardware_id.empty()) {
@@ -416,7 +416,7 @@ int cmd_probe() {
     if (!report) {
         print_error(report.error());
         std::puts("hint: the stage-1 personality read (vendor IN 0xA9, "
-                  "wIndex 0) is the only I/O this command performs — record "
+                  "wIndex 0) is the only I/O this command performs - record "
                   "this output as bootstrap evidence; interpretation guide: "
                   "docs/BOOTSTRAP.md");
         return 1;
@@ -433,7 +433,7 @@ int cmd_probe() {
     }
     std::printf("  ascii: %s\n", ascii.c_str());
     std::puts("Note: the C0 record's byte layout is not documented in this "
-              "repository — raw bytes only, no decoding applied "
+              "repository - raw bytes only, no decoding applied "
               "(docs/BOOTSTRAP.md).");
     std::puts("Probe sent exactly one vendor control read: no bulk traffic, "
               "no writes. Firmware upload is not implemented (evidence gaps: "
@@ -519,10 +519,10 @@ int run_scanner_command(std::string_view command) {
 
 // The live-scan session opener wired into cli::run_scan_command.
 //
-// Reuses the EXISTING working sequence — usb::open_first(cold_ok=false)
+// Reuses the EXISTING working sequence - usb::open_first(cold_ok=false)
 // (warm device only: the cold/bootstrap path is probe's, not ours),
 // Scanner::connect (the documented open handshake that identify and
-// status already perform), identify() — and hands over ONE session:
+// status already perform), identify() - and hands over ONE session:
 // command frames (bulk 0x01/0x81) and image reads (bulk 0x86) both
 // ride this transport, so no second connection ever competes with it.
 // No cold boot, no firmware reload, no re-initialisation beyond the
@@ -610,7 +610,7 @@ int main(int argc, char** argv) {
         // Explicit opt-in only: run_scan_command opens the scanner
         // solely on the --live-scan path (scan_cli.hpp). The default
         // invocation and --dry-run are decided in validation, before
-        // the opener exists — no USB traffic is possible there.
+        // the opener exists - no USB traffic is possible there.
         pakon::cli::ScanCliDeps deps;
         deps.open_session = &open_live_session;
         return pakon::cli::run_scan_command(scan_args, deps, stdout, stderr);

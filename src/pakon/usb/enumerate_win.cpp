@@ -6,7 +6,7 @@
 //      devnode, driver or no driver. This is what makes a Code 28 cold
 //      unit discoverable: without a function driver Windows registers no
 //      GUID_DEVINTERFACE_USB_DEVICE interface instance, so interface-only
-//      enumeration never sees the device — but its devnode exists as soon
+//      enumeration never sees the device - but its devnode exists as soon
 //      as the device is on the bus. Hardware-ID matching lives in
 //      usb/identity.hpp (unit-tested on any host).
 //   2. Device interfaces (GUID_DEVINTERFACE_USB_DEVICE): supplies the
@@ -49,14 +49,14 @@ namespace {
 struct Discovery {
     std::vector<DeviceInfo> devices;
 
-    // Lowercased instance ID → index into `devices` (pass 1 only).
+    // Lowercased instance ID -> index into `devices` (pass 1 only).
     std::map<std::string, std::size_t> by_instance;
 
-    // vid:pid identities pass 1 listed at device level — used to drop
+    // vid:pid identities pass 1 listed at device level - used to drop
     // duplicate &MI_ function entries for scanners already counted once.
     std::set<std::pair<std::uint16_t, std::uint16_t>> pnp_identities;
 
-    // Lowercased instance ID → driver service name ("" = none installed).
+    // Lowercased instance ID -> driver service name ("" = none installed).
     std::map<std::string, std::string> service_by_instance;
 };
 
@@ -97,7 +97,7 @@ std::string devnode_service(HDEVINFO set, SP_DEVINFO_DATA& devinfo) {
     return service;
 }
 
-// Pass 1 — PnP device tree: works without any driver bound.
+// Pass 1 - PnP device tree: works without any driver bound.
 void enumerate_pnp(Discovery& discovery) {
     HDEVINFO set = SetupDiGetClassDevsA(nullptr, nullptr, nullptr,
                                         DIGCF_PRESENT | DIGCF_ALLCLASSES);
@@ -130,7 +130,7 @@ void enumerate_pnp(Discovery& discovery) {
     SetupDiDestroyDeviceInfoList(set);
 }
 
-// Pass 2 — registered device interfaces: device_path for devices a
+// Pass 2 - registered device interfaces: device_path for devices a
 // function driver exposes, plus the historical enumeration of all other
 // USB devices. Pakon devices already listed by pass 1 are merged, not
 // duplicated.
@@ -221,12 +221,12 @@ std::string pnp_only_note(const Discovery& discovery, const DeviceInfo& device) 
     const std::string service = (it == discovery.service_by_instance.end()) ? "" : it->second;
     if (service.empty()) {
         return "discovered via PnP but no function-driver interface is registered "
-               "(Code 28: no compatible driver installed) — not openable; install "
+               "(Code 28: no compatible driver installed) - not openable; install "
                "driver/PakonWinUSB.inf to bind WinUSB (docs/WINUSB_TEST.md)";
     }
     return "discovered via PnP; function driver '" + service +
            "' is bound but registers no GUID_DEVINTERFACE_USB_DEVICE interface "
-           "— not openable via WinUSB";
+           "- not openable via WinUSB";
 }
 
 // Try to add interface/endpoint detail via WinUSB. Fails harmlessly when
@@ -234,7 +234,7 @@ std::string pnp_only_note(const Discovery& discovery, const DeviceInfo& device) 
 void enrich_interfaces(DeviceInfo& info) {
     // Same shared, unit-tested open parameters as the transport
     // (usb/win_usb_open.hpp): both sites must open identically, or they
-    // drift — the transport's non-overlapped open is what produced
+    // drift - the transport's non-overlapped open is what produced
     // ERROR_INVALID_HANDLE (6) from WinUsb_Initialize on the cold unit
     // (2026-10-07) while this path succeeded.
     HANDLE device = CreateFileA(
@@ -326,7 +326,7 @@ std::vector<DeviceInfo> enumerate() {
     enumerate_pnp(discovery);
     enumerate_interfaces(discovery);
 
-    // Endpoint detail for Pakon devices only — do not poke unrelated
+    // Endpoint detail for Pakon devices only - do not poke unrelated
     // hardware. Devnodes without an interface are reported as discovered
     // but not openable instead of being opened (there is no path to open).
     for (auto& device : discovery.devices) {

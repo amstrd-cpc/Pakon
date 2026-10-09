@@ -81,7 +81,7 @@ Result<WindowReport> ImageReceiver::run(IImageSource& source, RawImage& out) {
             return failure<WindowReport>(
                 ErrorKind::image_truncated,
                 std::format("{} bytes left after the last complete row ({} rows "
-                            "framed) — the stream ended short",
+                            "framed) - the stream ended short",
                             tail->leftover_bytes, framer.rows_emitted()));
         }
         report.truncated_tail_bytes = tail->leftover_bytes;

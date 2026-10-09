@@ -1,4 +1,4 @@
-// The `scan` command — see scan_cli.hpp for the safety rules this file
+// The `scan` command - see scan_cli.hpp for the safety rules this file
 // implements. Everything before run_live() is pure argument handling
 // and plan rendering: no usb:: symbol is referenced anywhere outside
 // the single SessionOpener call, which exists only on the --live-scan
@@ -45,7 +45,7 @@ enum class FilmEnd { unset, quiescence, rows };
 // STRUCTURALLY from base4 (integration/offset/width ramp words, an
 // extra enable_scan, different lamp masks and speed words), so running
 // the base4 plan under their name would invent bytes. They parse, then
-// are refused explicitly — never silently substituted.
+// are refused explicitly - never silently substituted.
 struct ConfigChoice {
     protocol::ScanLineParams params;
     const char* capture;     // capture file behind the name
@@ -215,7 +215,7 @@ ParseOutcome parse_options(const std::vector<std::string>& args) {
     if (!choice->plan_available) {
         outcome.error = std::format(
             "--config {}: recorded in the captures ({}) but its phase plan is not "
-            "replayed yet — only base4-ir-off has a byte-exact plan; refusing to "
+            "replayed yet - only base4-ir-off has a byte-exact plan; refusing to "
             "substitute another configuration's frames",
             o.config, choice->capture);
         return outcome;
@@ -302,7 +302,7 @@ std::string film_text(const Options& o) {
             o.film_rows, o.idle_reads);
     }
     return std::format(
-        "no-progress ({} consecutive idle reads) — ends when the device stops "
+        "no-progress ({} consecutive idle reads) - ends when the device stops "
         "feeding",
         o.idle_reads);
 }
@@ -346,7 +346,7 @@ void print_frames(std::FILE* out, const char* phase,
 }
 
 // Dry-run output: the exact plan. Builds the same phase plans the live
-// run will send — no device object exists anywhere in this path.
+// run will send - no device object exists anywhere in this path.
 void print_preflight(const Options& o, std::FILE* out) {
     const auto& addresses = protocol::kF135Plus;
     scan::ScanPlanParameters params{};
@@ -357,26 +357,26 @@ void print_preflight(const Options& o, std::FILE* out) {
     const auto transport = scan::transport_plan(addresses, params);
     const auto teardown = scan::teardown_plan(addresses, params);
 
-    std::fprintf(out, "pakon-cli scan — preflight (dry run)\n");
+    std::fprintf(out, "pakon-cli scan - preflight (dry run)\n");
     std::fprintf(out, "No device is opened and no USB traffic is sent.\n\n");
 
     std::fprintf(out, "mode:              dry run (rerun with --live-scan to execute)\n");
-    std::fprintf(out, "configuration:     %s (ScanLineParams 0x%04x) — explicit --config\n",
+    std::fprintf(out, "configuration:     %s (ScanLineParams 0x%04x) - explicit --config\n",
                  o.config.c_str(),
                  static_cast<unsigned>(protocol::ScanLineParams::base4_ir_off));
     std::fprintf(out, "plan basis:        byte-exact replay of capture base4.jsonl\n");
     std::fprintf(out, "                   (alibosworth/pakon-captures, F-135+ serial 16402)\n");
-    std::fprintf(out, "live session:      one warm connection — usb::open_first(cold_ok=false)\n");
+    std::fprintf(out, "live session:      one warm connection - usb::open_first(cold_ok=false)\n");
     std::fprintf(out, "                   -> Scanner::connect -> identify; no cold boot, no\n");
     std::fprintf(out, "                   firmware reload, no second connection; commands and\n");
     std::fprintf(out, "                   image reads share that transport\n");
-    std::fprintf(out, "model gate:        F-135+ only — identify() must report 0x40/0x44 or the\n");
+    std::fprintf(out, "model gate:        F-135+ only - identify() must report 0x40/0x44 or the\n");
     std::fprintf(out, "                   run refuses before any frame is sent\n");
     std::fprintf(out, "addresses:         light 0x%02x, motor 0x%02x (assumed here, verified live)\n",
                  addresses.light, addresses.motor);
     std::fprintf(out, "endpoints:         commands OUT 0x%02x / IN 0x%02x (allow-list 0x10/0x20/\n",
                  protocol::scan::kCommandOutEndpoint, protocol::scan::kCommandInEndpoint);
-    std::fprintf(out, "                   0x24/0x40/0x44 only — never 0x22/0x26/0x42/0x46, never\n");
+    std::fprintf(out, "                   0x24/0x40/0x44 only - never 0x22/0x26/0x42/0x46, never\n");
     std::fprintf(out, "                   0xA2/0xA4); image IN 0x%02x, %zu-byte reads\n",
                  image::kImageEndpoint, image::kCaptureChunkBytes);
     std::fprintf(out, "completion:\n");
@@ -392,7 +392,7 @@ void print_preflight(const Options& o, std::FILE* out) {
     std::fprintf(out, "service polls:     %s repeats between init and service until the device\n",
                  frame_hex(protocol::scan::read_service_status(addresses.light)).c_str());
     std::fprintf(out, "                   reports service-wanted (captured replies: idle 0103400800,\n");
-    std::fprintf(out, "                   service-wanted 0103408802 — fixture provenance header)\n");
+    std::fprintf(out, "                   service-wanted 0103408802 - fixture provenance header)\n");
     std::fprintf(out, "planned frames:   init %zu, service %zu, calibration %zu, transport %zu,\n",
                  init.size(), service.size(), calibration.size(), transport.size());
     std::fprintf(out, "                   teardown %zu\n", teardown.size());
@@ -402,7 +402,7 @@ void print_preflight(const Options& o, std::FILE* out) {
     print_frames(out, "calibration", calibration);
     print_frames(out, "transport", transport);
     print_frames(out, "teardown", teardown);
-    std::fprintf(out, "dry run only — nothing was sent; --live-scan executes this plan "
+    std::fprintf(out, "dry run only - nothing was sent; --live-scan executes this plan "
                       "(separate approval).\n");
 }
 
@@ -414,7 +414,7 @@ int run_live(const Options& o, const ScanCliDeps& deps, std::FILE* out, std::FIL
         return 1;
     }
 
-    // The single device entry point of this command — called at most
+    // The single device entry point of this command - called at most
     // once, only here, only under --live-scan.
     auto opened = deps.open_session();
     if (!opened) {
@@ -425,7 +425,7 @@ int run_live(const Options& o, const ScanCliDeps& deps, std::FILE* out, std::FIL
     }
 
     // Close the one session on every exit below (no documented close
-    // frame exists — disconnect drops the transport, scanner.cpp).
+    // frame exists - disconnect drops the transport, scanner.cpp).
     struct DisconnectGuard {
         scanner::Scanner* instance;
         ~DisconnectGuard() {
@@ -438,7 +438,7 @@ int run_live(const Options& o, const ScanCliDeps& deps, std::FILE* out, std::FIL
     if (opened->identity.model != scanner::Model::f135_plus) {
         std::fprintf(err,
                      "error: scan: live scan requires an F-135+ (the captured plans "
-                     "target 0x40/0x44); identify reported %s — refusing\n",
+                     "target 0x40/0x44); identify reported %s - refusing\n",
                      std::string(scanner::to_string(opened->identity.model)).c_str());
         return 1;
     }
@@ -474,7 +474,7 @@ int run_live(const Options& o, const ScanCliDeps& deps, std::FILE* out, std::FIL
                      std::string(to_string(result.error().kind)).c_str(),
                      result.error().message.c_str());
         std::fprintf(err,
-                     "session state: %s (terminal fault — not retried; the best-effort "
+                     "session state: %s (terminal fault - not retried; the best-effort "
                      "teardown ran before this point)\n",
                      std::string(scan::to_string((*runner)->session().state())).c_str());
         return 1;
@@ -543,7 +543,7 @@ int run_scan_command(const std::vector<std::string>& args, const ScanCliDeps& de
 
 void print_scan_usage(std::FILE* out) {
     std::fprintf(out,
-                 "scan — capture a scan session (explicit opt-in; nothing runs by default)\n"
+                 "scan - capture a scan session (explicit opt-in; nothing runs by default)\n"
                  "  pakon-cli scan --dry-run ...   print the exact plan (PPB frames,\n"
                  "                                endpoint usage, completion policies,\n"
                  "                                output paths) without opening the\n"
@@ -558,14 +558,14 @@ void print_scan_usage(std::FILE* out) {
                  "                           have no replayed plan yet and are refused,\n"
                  "                           never substituted)\n"
                  "  --calibration-rows <N>   explicit W1 row budget (N >= 1)\n"
-                 "  --idle-reads <N>         quiescence limit in bulk reads (N >= %zu — one\n"
+                 "  --idle-reads <N>         quiescence limit in bulk reads (N >= %zu - one\n"
                  "                           timeout must never end a window)\n"
                  "  --film-end <mode>        quiescence | rows\n"
                  "  --film-rows <N>          film row budget (required with --film-end rows)\n"
                  "  --out-prefix <path>      writes <path>.calibration.pakraw and\n"
                  "                           <path>.film.pakraw (PAKRAW01 stream-raw)\n"
                  "exit codes: 0 ok, 1 runtime failure, 2 usage error (usage errors are\n"
-                 "decided before any device entry point — exit 2 means no USB traffic)\n",
+                 "decided before any device entry point - exit 2 means no USB traffic)\n",
                  kMinIdleReads);
 }
 

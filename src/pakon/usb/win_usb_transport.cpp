@@ -1,12 +1,12 @@
 // WinUSB backend for IUsbTransport (Windows).
 //
 // Endpoint facts implemented here are from pakon-reference:
-//   - command channel: bulk OUT 0x01 → bulk IN 0x81, "an atomic
-//     write-then-read" (docs/ppb-protocol.md § Command channel)
+//   - command channel: bulk OUT 0x01 -> bulk IN 0x81, "an atomic
+//     write-then-read" (docs/ppb-protocol.md sec. Command channel)
 //   - image stream: a separate bulk IN endpoint, max packet 512, host
 //     reads it in transfers up to 0x5000 (20480) bytes (docs/image-stream.md)
 //   - vendor control requests 0xA4/0xA9 for EEPROM reads
-//     (docs/calibration.md § The read)
+//     (docs/calibration.md sec. The read)
 
 #ifdef _WIN32
 
@@ -63,7 +63,7 @@ public:
         // handle MUST be opened overlapped: a non-overlapped open of the
         // same path made WinUsb_Initialize fail with ERROR_INVALID_HANDLE
         // on the real cold unit (2026-10-07) while the overlapped
-        // enumeration open succeeded — see the header for the evidence.
+        // enumeration open succeeded - see the header for the evidence.
         // Stage 1: CreateFile. Its failure is reported on its own, with
         // the Windows error code, and never confused with stage 2.
         HANDLE device = CreateFileA(
@@ -92,7 +92,7 @@ public:
             return failure<std::unique_ptr<WinUsbTransport>>(
                 ErrorKind::usb_open_failed,
                 std::format("WinUsb_Initialize failed for {}: Windows error {} ({}) "
-                            "— CreateFile succeeded, so the handle itself is valid; "
+                            "- CreateFile succeeded, so the handle itself is valid; "
                             "the bound function driver may not be WinUSB "
                             "(see docs/USB.md)",
                             info.device_path, error, win32_error_text(error)));
@@ -257,7 +257,7 @@ private:
 Result<std::unique_ptr<IUsbTransport>> open_first(bool cold_ok) {
     auto devices = enumerate_pakon();
 
-    // Prefer an operational (warm) device with a registered interface —
+    // Prefer an operational (warm) device with a registered interface -
     // only an interface yields a device_path CreateFile can open. Firmware
     // loading for a cold device is out of scope (docs/usb-identity-and-firmware.md
     // sequence, firmware bytes not shipped by this project), so cold
@@ -294,12 +294,12 @@ Result<std::unique_ptr<IUsbTransport>> open_first(bool cold_ok) {
         }();
         if (!any_interface) {
             // Devices were found (list shows them) but nothing can be
-            // opened — say exactly why instead of pretending they're absent.
+            // opened - say exactly why instead of pretending they're absent.
             return failure<std::unique_ptr<IUsbTransport>>(
                 ErrorKind::usb_access_denied,
                 "Pakon device discovered but not openable: no function-driver "
                 "device interface is registered (Code 28, or a driver that does "
-                "not expose WinUSB) — see docs/USB.md § Enumeration and "
+                "not expose WinUSB) - see docs/USB.md sec. Enumeration and "
                 "docs/WINUSB_TEST.md to bind WinUSB");
         }
         return failure<std::unique_ptr<IUsbTransport>>(
