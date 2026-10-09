@@ -93,7 +93,10 @@ PAKON_TEST(line_sync_rejects_noise_clusters) {
 }
 
 PAKON_TEST(line_sync_requires_enough_marker_positions) {
-    std::vector<std::uint8_t> bytes(40000, 0x00);
+    // 5 odd positions 20000 bytes apart need 80001 bytes; a 40000-byte
+    // buffer here once wrote past its end (UB, caught by the libstdc++
+    // debug assertions).
+    std::vector<std::uint8_t> bytes(100000, 0x00);
     for (std::size_t i = 0; i < 5; ++i) {
         bytes[i * 20000] = 0x01; // only 5 odd positions
     }
