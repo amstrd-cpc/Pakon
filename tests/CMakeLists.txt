@@ -76,6 +76,9 @@ add_test(NAME raw_writer COMMAND raw_writer_test)
 find_package(Threads REQUIRED)
 add_library(pakon_sim STATIC support/sim_device.cpp)
 target_link_libraries(pakon_sim PUBLIC pakon_core Threads::Threads)
+if(WIN32)
+    target_link_libraries(pakon_sim PRIVATE winmm) # timeBeginPeriod
+endif()
 target_include_directories(pakon_sim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 function(pakon_sim_test name source)

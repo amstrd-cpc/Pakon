@@ -9,11 +9,33 @@
 
 #include "pakon/eeprom/eeprom.hpp"
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <timeapi.h>
+#endif
+
 namespace pakon::sim {
 
 namespace {
 
 using Clock = std::chrono::steady_clock;
+
+// The producer paces itself with 500 µs sleeps and emits at most 64 KiB
+// per wake-up. Windows rounds a sleep up to the system timer tick
+// (~15.6 ms by default), which caps the device below the Base-4 line rate
+// (6000 B / 0.9 ms); a 1 ms timer period for the producer's lifetime
+// keeps it at the configured rate.
+struct TimerResolution {
+#ifdef _WIN32
+    TimerResolution() { timeBeginPeriod(1); }
+    ~TimerResolution() { timeEndPeriod(1); }
+    TimerResolution(const TimerResolution&) = delete;
+    TimerResolution& operator=(const TimerResolution&) = delete;
+#endif
+};
 
 constexpr std::uint8_t kHost = 0x10;
 constexpr std::uint8_t kPicl = 0x40;
@@ -743,6 +765,7 @@ void SimDevice::produce_line_locked() {
 }
 
 void SimDevice::producer_loop() {
+    [[maybe_unused]] const TimerResolution timer;
     std::unique_lock lock(mutex_);
     while (!quit_) {
         if ((control_ & 1) == 0) {
