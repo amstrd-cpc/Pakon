@@ -1,40 +1,28 @@
 #pragma once
 
-// The `scan` command: explicit live-scan gating, offline preflight, and
-// the single-session wiring of command channel + image source + runner
-// + raw output (scan/runner.hpp, image/raw_writer.hpp).
+// The `scan` and `eeprom` commands.
 //
 // Hard rules encoded here, proven by tests/cli/scan_cli_test.cpp:
 //
-//  - Nothing can reach USB unless the invocation carries --live-scan.
-//    The default invocation (no mode flag) and --dry-run are decided
-//    during argument validation, BEFORE any device entry point exists:
-//    the ONLY USB door is the injected SessionOpener, called at most
-//    once per run and only on the --live-scan path. The dry run prints
-//    the exact plan — frames, endpoints, completion policies, output
-//    paths — without opening anything.
-//  - Mode, configuration, completion budgets and output prefix are
-//    required arguments. No resolution/IR mode is chosen implicitly,
-//    no image byte budget is invented, and a single transient timeout
-//    can never end a window (--idle-reads >= 2 is enforced).
-//  - The live path reuses ONE warm-booted session: the production
-//    opener (main.cpp) is usb::open_first(cold_ok=false) →
-//    Scanner::connect → identify — the same sequence `identify` and
-//    `status` already use. No cold boot, no firmware reload, no second
-//    connection: command frames (bulk 0x01/0x81) and image reads
-//    (bulk 0x86) both ride that session's transport.
-//  - A live run is interruptible, but never by abrupt termination: the
-//    console/signal handler (apps/pakon-cli/interrupt.hpp) only
-//    latches a token, and the runner observes it at bounded points —
-//    service wait, phase boundaries, before every image read — to
-//    unwind through the ONE best-effort teardown and the
-//    DisconnectGuard (proven in tests/scan/runner_replay_test.cpp and
-//    tests/scan/usb_image_source_test.cpp). The service wait itself is
-//    deadline-bounded and progress-logged (scan::kServiceWaitTimeoutMs).
+//  - Nothing can reach USB unless the invocation carries --live-scan (or
+//    is the explicit `eeprom` read). Usage errors and --dry-run are
+//    decided during argument validation, BEFORE any device entry point
+//    exists: the ONLY USB door is the injected SessionOpener, called at
+//    most once per run. The dry run prints the exact fixed frames (init
+//    block, teardown), the data-dependent phases with their bounds, the
+//    endpoints and the output paths.
+//  - Mode, configuration and the window bound are required: --first-light
+//    (calibration window only, lamp on, motor never engaged) or
+//    --film-rows N (film window, N = hard row cap on top of film-end
+//    detection and the no-film timeout).
+//  - The live path reuses ONE warm-booted session (usb::open_first ->
+//    Scanner::connect -> identify), reads the unit's EEPROM (read-only
+//    allow-list), and runs scan::ScanRunner on the concurrent image
+//    stream. Teardown runs exactly once on every path, Ctrl+C included
+//    (apps/pakon-cli/interrupt.hpp latches the token).
 //
-// Exit codes: 0 success, 1 runtime failure, 2 usage error (a usage
-// error is decided before the opener could run — exit 2 always means
-// zero device I/O from this command).
+// Exit codes: 0 success, 1 runtime failure (including a teardown step
+// that failed), 2 usage error (decided before any device entry point).
 
 #include <cstdio>
 #include <functional>
@@ -71,5 +59,10 @@ int run_scan_command(const std::vector<std::string>& args,
 
 // The `scan` usage block (printed by main's --help as well).
 void print_scan_usage(std::FILE* out);
+
+// `eeprom [--out <file>]`: read the per-unit EEPROM (read-only allow-list),
+// print the parsed fields, optionally save the raw bytes.
+int run_eeprom_command(const std::vector<std::string>& args, const ScanCliDeps& deps,
+                       std::FILE* out, std::FILE* err);
 
 } // namespace pakon::cli

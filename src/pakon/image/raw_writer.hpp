@@ -33,7 +33,7 @@
 #include <utility>
 
 #include "pakon/errors/error.hpp"
-#include "pakon/image/reader.hpp"
+#include "pakon/image/format.hpp"
 
 namespace pakon::image {
 

@@ -1,278 +1,375 @@
 #include "pakon/scan/runner.hpp"
 
-#include <chrono>
+#include <algorithm>
 #include <format>
 #include <thread>
 
 #include "pakon/logging/logger.hpp"
-#include "pakon/protocol/scan_commands.hpp"
+#include "pakon/scan/film.hpp"
 
 namespace pakon::scan {
 
-Result<std::unique_ptr<ScanRunner>> ScanRunner::create(ScanRunnerConfig config) {
-    if (!config.calibration_completion || !config.transport_completion) {
-        return failure<std::unique_ptr<ScanRunner>>(
-            ErrorKind::image_no_completion_policy,
-            "both scan windows need an explicit completion policy");
-    }
-    if (config.read_bytes == 0) {
-        return failure<std::unique_ptr<ScanRunner>>(
-            ErrorKind::image_no_completion_policy,
-            "read size of 0 bytes would never make progress");
-    }
-    if (config.service_wait_timeout_ms == 0) {
-        return failure<std::unique_ptr<ScanRunner>>(
-            ErrorKind::scanner_timeout,
-            "a service wait deadline of 0 ms would fault before the first poll");
-    }
-    auto runner = std::unique_ptr<ScanRunner>(new ScanRunner());
-    runner->config_ = std::move(config);
-    const auto& a = runner->config_.addresses;
-    const auto& p = runner->config_.plan;
-    runner->init_frames_ = init_plan(a, p);
-    runner->service_frames_ = service_plan(a);
-    runner->calibration_frames_ = calibration_plan(a, p);
-    runner->transport_frames_ = transport_plan(a, p);
-    runner->teardown_frames_ = teardown_plan(a, p);
-    return runner;
+namespace ps = protocol::scan;
+using Clock = std::chrono::steady_clock;
+
+namespace {
+
+// Panel LED states the OEM writes at each step (FPGA sub 9, bDrvSetLed;
+// cosmetic, replayed from base4.jsonl 6.692-42.432).
+constexpr std::uint16_t kLedIdle = 0x0017;
+constexpr std::uint16_t kLedCalibrating = 0x0313;
+constexpr std::uint16_t kLedFilmArmed = 0x0217;
+constexpr std::uint16_t kLedScanning = 0x0295;
+constexpr std::uint16_t kLedFilmSeen = 0x0215;
+constexpr std::uint16_t kLedFilmEnd = 0x02D4;
+
+// Film-pass on-time boost for colour negative: the per-channel ratio of
+// film to open-gate on-times in base4.jsonl (0x0170/0x0047,
+// 0x014F/0x00F1, 0x01A8/0x00A9 at 22.117 vs 24.832) — the OEM's
+// DutyCycle vs DutyCycleOpenGate pair (= 10^D of the film base).
+// [CAPTURE-derived, INFERRED to be a film-type constant.]
+constexpr double kBoostR = 1.39;
+constexpr double kBoostG = 2.51;
+constexpr double kBoostB = 5.18;
+
+double seconds_since(Clock::time_point t) {
+    return std::chrono::duration<double>(Clock::now() - t).count();
 }
 
-VoidResult ScanRunner::run_plan(ICommandChannel& commands,
-                                const std::vector<ppb::Frame>& frames,
-                                const char* phase) {
-    for (const auto& frame : frames) {
-        auto reply = commands.exchange(frame);
-        if (!reply) {
-            return void_failure(reply.error().kind,
-                                std::format("{}: {}", phase, reply.error().message));
-        }
-        // Abort on anything that is not the documented success for the
-        // request type — never retry silently.
-        const bool ok =
-            frame.type == ppb::FrameType::read ? ppb::is_read_success(*reply)
-                                               : ppb::is_success(reply->status);
-        if (!ok) {
-            return void_failure(
-                ErrorKind::ppb_bad_status,
-                std::format("{}: frame to bus {:02x} reg {:02x} rejected with status {}",
-                            phase, frame.data[0], frame.data[2],
-                            ppb::to_string(reply->status)));
-        }
+VoidResult check_cancel(const CancelToken* cancel, const char* where) {
+    if (cancel && cancel->requested()) {
+        return void_failure(ErrorKind::cancelled, std::format("interrupt observed {}", where));
     }
     return {};
 }
 
-Result<ScanResult> ScanRunner::run(ICommandChannel& commands, image::IImageSource& images) {
-    ScanResult result;
+} // namespace
+
+std::string_view to_string(FilmEnd end) {
+    switch (end) {
+    case FilmEnd::none: return "none";
+    case FilmEnd::film_passed: return "film passed (density detector)";
+    case FilmEnd::no_film_timeout: return "no film within the timeout";
+    case FilmEnd::row_budget: return "row budget reached";
+    }
+    return "unknown";
+}
+
+std::vector<ppb::Frame> ScanRunner::init_frames(const protocol::ControllerAddresses& a) {
+    std::vector<ppb::Frame> f;
+    for (auto& x : ps::reset_fifos(a)) f.push_back(x);
+    for (auto& x : ps::lamp_temperature_init(a.light)) f.push_back(x);
+    for (auto& x : ps::tec_init(a.light)) f.push_back(x);
+    // bDrvInitCcd (TLB@0x1002d5c0)
+    f.push_back(ps::lamp_power_init(a.light));
+    f.push_back(ps::lamp_mask(a.light, true, false));
+    f.push_back(ps::led_on_times(a.light, {0, 0, 0, 0, ps::on_time_base(0xFFD)}));
+    f.push_back(ps::lamp_mask(a.light, false, false));
+    f.push_back(ps::resample(a.light, false));
+    f.push_back(ps::fpga(a.motor, ps::Fpga::integration, 0xFFD));
+    f.push_back(ps::fpga(a.motor, ps::Fpga::control, ps::kControlInit));
+    f.push_back(ps::fpga(a.motor, ps::Fpga::reg11, 0));
+    f.push_back(ps::fpga(a.motor, ps::Fpga::pixel_start, 0x3E));
+    f.push_back(ps::fpga(a.motor, ps::Fpga::pixel_end, 0x3E + 2000));
+    f.push_back(ps::fpga(a.motor, ps::Fpga::reg1, 0));
+    f.push_back(ps::fpga(a.motor, ps::Fpga::reg2, 0));
+    f.push_back(ps::fpga(a.motor, ps::Fpga::reg3, 0));
+    f.push_back(ps::fpga(a.motor, ps::Fpga::reg10, 0x400));
+    f.push_back(ps::ad_register(a.motor, 0, 0x78));
+    f.push_back(ps::ad_register(a.motor, 1, 0x80));
+    // bDriveMotorStop, status reads, panel LEDs
+    f.push_back(ps::motor_stop(a.motor));
+    f.push_back(ps::read_dx_records(a.light));
+    f.push_back(ps::read_lamp_flags(a.light));
+    f.push_back(ps::read_lamp_setpoint(a.light));
+    f.push_back(ps::read_lamp_temperatures(a.light));
+    f.push_back(ps::fpga(a.motor, ps::Fpga::panel_leds, 0x0014));
+    f.push_back(ps::fpga(a.motor, ps::Fpga::panel_leds, kLedIdle));
+    return f;
+}
+
+Result<std::unique_ptr<ScanRunner>> ScanRunner::create(RunnerConfig config) {
+    if (config.kind == ScanKind::film && config.film_row_budget == 0) {
+        return failure<std::unique_ptr<ScanRunner>>(
+            ErrorKind::image_no_completion_policy,
+            "a film window needs a row budget (> 0) as its hard cap");
+    }
+    if (config.poll_interval.count() <= 0 || config.warmup_timeout.count() <= 0) {
+        return failure<std::unique_ptr<ScanRunner>>(ErrorKind::scanner_timeout,
+                                                    "poll interval and warm-up timeout must be > 0");
+    }
+    return std::unique_ptr<ScanRunner>(new ScanRunner(std::move(config)));
+}
+
+Result<ScanResult> ScanRunner::run(ICommandChannel& commands, stream::IImageStream& stream) {
+    result_ = {};
+    result_.mode = config_.mode;
+    result_.kind = config_.kind;
+    result_.unit = config_.unit;
+    ScanDevice device(commands, config_.addresses);
+    // LED settle waits drain the stream (it keeps flowing while the
+    // acquire bit is set; an undrained ring would overflow).
+    device.set_settle([&](std::chrono::milliseconds d) {
+        const auto until = Clock::now() + std::chrono::duration_cast<Clock::duration>(
+                                               d * config_.settle_scale);
+        while (Clock::now() < until && !(config_.cancel && config_.cancel->requested())) {
+            stream.discard();
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        stream.discard();
+    });
+
+    auto r = run_phases(device, stream);
+    // The one teardown, on every path. Never cancellable.
+    const auto t0 = Clock::now();
+    result_.teardown = device.teardown();
+    stream.stop();
+    result_.phases.push_back({"teardown", seconds_since(t0)});
+    result_.stream = stream.stats();
+    if (!r) {
+        log::Logger::instance().log(log::Level::error, "scan {}: {}",
+                                    r.error().kind == ErrorKind::cancelled ? "cancelled" : "failed",
+                                    r.error().message);
+        return r.error();
+    }
+    return result_;
+}
+
+VoidResult ScanRunner::run_phases(ScanDevice& device, stream::IImageStream& stream) {
     const auto& a = config_.addresses;
+    const ScanMode mode = config_.mode;
+    const auto& base = config_.unit.base[base_index(mode.base)];
+    const std::uint16_t integ = integration(mode);
 
-    auto fault = [&](const Error& error) -> Result<ScanResult> {
-        // Best-effort teardown for failures after acquisition started:
-        // one pass over the teardown plan so the motor returns to idle
-        // speed and the lamp goes off even though the scan aborted.
-        // Its failures are logged and swallowed — the caller always
-        // sees the ORIGINAL error — and it is attempted at most once
-        // (a fault while tearing down already used its one attempt).
-        if (acquisition_started_ && !teardown_attempted_) {
-            teardown_attempted_ = true;
-            if (auto t = run_plan(commands, teardown_frames_, "teardown (best effort)");
-                !t) {
-                log::Logger::instance().log(
-                    log::Level::warn,
-                    "best-effort teardown after failure did not complete: {}",
-                    t.error().message);
-            }
+    // --- init ---------------------------------------------------------
+    auto t = Clock::now();
+    for (const auto& frame : init_frames(a)) {
+        if (auto r = device.read(frame); !r) {
+            return r.error();
         }
-        if (auto f = session_.handle(ScanEvent::fault); !f) {
-            return failure<ScanResult>(
-                ErrorKind::scanner_unexpected_state,
-                std::format("session fault handling failed: {}", f.error().message));
-        }
-        log::Logger::instance().log(
-            log::Level::error, "{}: {}",
-            error.kind == ErrorKind::cancelled ? "scan session cancelled"
-                                                : "scan session failed",
-            error.message);
-        return failure<ScanResult>(error.kind, error.message);
-    };
-    auto fail_plan = [&](VoidResult r) -> Result<ScanResult> {
-        return fault(Error{r.error().kind, r.error().message});
-    };
+    }
+    result_.phases.push_back({"init", seconds_since(t)});
 
-    if (auto s = session_.handle(ScanEvent::start); !s) {
-        return fault(s.error());
-    }
-    if (auto r = run_plan(commands, init_frames_, "init"); !r) {
-        return fail_plan(r);
-    }
-    if (auto s = session_.handle(ScanEvent::init_done); !s) {
-        return fault(s.error());
-    }
-
-    // ready: poll the light service register until the device asks for
-    // service (payload 0x02; capture corpus: idle replies carry 00).
-    // The wait is bounded on three axes (it used to be a bare
-    // while(true) with no deadline, no counts and no logging — audit
-    // blocker C):
-    //   - cancellation: an interrupt ends the wait cleanly, while the
-    //     device is still idle;
-    //   - deadline: service_wait_timeout_ms after the first poll, with
-    //     the poll count in the message (kServiceWaitTimeoutMs for the
-    //     capture evidence behind the default);
-    //   - visibility: start, a 5 s heartbeat and the outcome are logged
-    //     at info (the CLI's default level), so the operator never
-    //     watches a silent gap after the `live scan:` line.
+    // --- lamp warm-up (bLampTemperatureStable) -------------------------
+    t = Clock::now();
     {
-        const auto started = std::chrono::steady_clock::now();
-        const auto deadline =
-            started + std::chrono::milliseconds(config_.service_wait_timeout_ms);
-        auto heartbeat = started;
-        unsigned long polls = 0;
-        log::Logger::instance().log(
-            log::Level::info,
-            "service poll: waiting for the device to request service (deadline {} ms)",
-            config_.service_wait_timeout_ms);
-        while (true) {
-            if (config_.cancel && config_.cancel->requested()) {
-                return fault(Error{ErrorKind::cancelled,
-                                   "interrupt observed while waiting for service "
-                                   "(the device is still idle)"});
+        const auto deadline = Clock::now() + config_.warmup_timeout;
+        auto last_direct = Clock::now();
+        auto heartbeat = Clock::now();
+        bool stable = false;
+        while (!stable) {
+            if (auto c = check_cancel(config_.cancel, "during lamp warm-up"); !c) {
+                return c;
             }
-            if (std::chrono::steady_clock::now() >= deadline) {
-                return fault(Error{
-                    ErrorKind::scanner_timeout,
-                    std::format("the device did not request service within {} ms "
-                                "({} polls); aborting while the device is still idle",
-                                config_.service_wait_timeout_ms, polls)});
+            if (Clock::now() >= deadline) {
+                return void_failure(ErrorKind::scanner_timeout,
+                                    std::format("lamp not stable after {} s (OEM limit 300 s)",
+                                                config_.warmup_timeout.count() / 1000));
             }
-            auto reply = commands.exchange(protocol::scan::read_service_status(a.light));
-            if (!reply) {
-                return fault(reply.error());
+            auto ev = device.poll_service();
+            if (!ev) {
+                return ev.error();
             }
-            if (!ppb::is_read_success(*reply)) {
-                return fault(Error{ErrorKind::ppb_bad_status,
-                                   std::format("service poll rejected with flags {}",
-                                               ppb::to_string(reply->status))});
+            if (ev->pending) {
+                result_.events.push_back(std::format(
+                    "warm-up: service light 0x{:02x} motor 0x{:02x}", ev->light_status,
+                    ev->motor_status));
             }
-            ++polls;
-            if (protocol::scan::service_requested(*reply)) {
-                break;
+            stable = ev->lamp_stable();
+            // The OEM also re-reads the lamp status on a timer, which
+            // covers a lamp that was already warm (no new event).
+            if (!stable && Clock::now() - last_direct >= std::chrono::seconds(2)) {
+                last_direct = Clock::now();
+                auto lamp = device.read_lamp_status();
+                if (!lamp) {
+                    return lamp.error();
+                }
+                stable = lamp->lamp_stable();
             }
-            const auto now = std::chrono::steady_clock::now();
-            if (now - heartbeat >= std::chrono::seconds(5)) {
-                heartbeat = now;
-                log::Logger::instance().log(
-                    log::Level::info, "service poll: still waiting ({} polls, {} ms)",
-                    polls,
-                    std::chrono::duration_cast<std::chrono::milliseconds>(now - started)
-                        .count());
+            if (Clock::now() - heartbeat >= std::chrono::seconds(5)) {
+                heartbeat = Clock::now();
+                log::Logger::instance().log(log::Level::info, "lamp warm-up: waiting ({:.0f} s)",
+                                            seconds_since(t));
             }
-            std::this_thread::sleep_for(
-                std::chrono::milliseconds(kServicePollIntervalMs));
+            if (!stable) {
+                std::this_thread::sleep_for(config_.poll_interval);
+            }
         }
-        log::Logger::instance().log(
-            log::Level::info, "service requested after {} polls ({} ms)", polls,
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - started)
-                .count());
     }
-    if (auto s = session_.handle(ScanEvent::service_requested); !s) {
-        return fault(s.error());
-    }
-    if (auto r = run_plan(commands, service_frames_, "service"); !r) {
-        return fail_plan(r);
-    }
-    if (auto s = session_.handle(ScanEvent::service_done); !s) {
-        return fault(s.error());
-    }
-    // From here on the acquisition is started: the lamp/CCD
-    // configuration and the window streams follow, so any failure
-    // below first attempts the best-effort teardown (see fault()).
-    acquisition_started_ = true;
+    result_.phases.push_back({"lamp warm-up", seconds_since(t)});
 
-    // Interrupt boundaries: checked between phases, never inside a
-    // plan (cleanup must not be abortable) and never after the film
-    // window (a completed scan finishes its teardown and succeeds).
-    if (config_.cancel && config_.cancel->requested()) {
-        return fault(Error{ErrorKind::cancelled,
-                           "interrupt observed before the calibration window"});
+    // --- Corrections window --------------------------------------------
+    t = Clock::now();
+    if (auto r = check_cancel(config_.cancel, "before Corrections"); !r) {
+        return r;
     }
-
-    // calibrating: send the window's command block, then drain W1
-    // until its policy completes. (The OEM interleaves the block with
-    // the stream; the reference does not establish that the ordering
-    // matters, so the replay is sequential.)
-    if (auto r = run_plan(commands, calibration_frames_, "calibration"); !r) {
-        return fail_plan(r);
+    LineReader lines(stream, config_.cancel);
+    if (auto r = stream.start(); !r) { // BEFORE the acquire bit (OEM_RE.md §6)
+        return r;
     }
+    if (auto r = device.panel_leds(kLedCalibrating); !r) {
+        return r;
+    }
+    // Calibration geometry first, then bDrvCcdAcquireAndDxStart.
     {
-        auto receiver =
-            image::ImageReceiver::create(config_.calibration_completion, config_.read_bytes);
-        if (!receiver) {
-            return fault(receiver.error());
+        const Geometry g = calibration_geometry(mode, base.offset, false);
+        if (auto r = device.fpga_settings(g, integ); !r) {
+            return r;
         }
-        auto report = (*receiver)->run(images, result.calibration);
-        if (!report) {
-            return fault(report.error());
+        if (auto r = device.acquire(true); !r) {
+            return r;
         }
-        result.calibration_report = *report;
-        log::Logger::instance().log(
-            log::Level::info,
-            "calibration window: {} rows, {} bytes, completion: {} ({})", report->rows,
-            report->bytes_received, report->completion,
-            result.calibration.geometry.samples_per_row);
+        if (auto r = device.dx_start(dx_word(mode)); !r) {
+            return r;
+        }
     }
-    if (auto s = session_.handle(ScanEvent::calibration_done); !s) {
-        return fault(s.error());
+    CorrectionsConfig cc;
+    cc.mode = mode;
+    cc.offset = base.offset;
+    cc.line_timeout = config_.line_timeout;
+    auto corr = run_corrections(device, lines, cc);
+    if (!corr) {
+        return corr.error();
+    }
+    result_.corrections = std::move(*corr);
+    result_.phases.push_back({"corrections", seconds_since(t)});
+
+    if (config_.kind == ScanKind::first_light) {
+        t = Clock::now();
+        // White lines at the final settings (lamp on, motor never engaged).
+        image::RawImage white;
+        white.geometry.samples_per_row = static_cast<std::uint32_t>(lines.samples_per_line());
+        lines.flush();
+        for (std::size_t n = 0; n < config_.first_light_lines; ++n) {
+            auto line = lines.next_line(config_.line_timeout);
+            if (!line) {
+                return line.error();
+            }
+            white.samples.insert(white.samples.end(), line->begin(), line->end());
+        }
+        result_.white = std::move(white);
+        if (auto r = device.acquire(false); !r) {
+            return r;
+        }
+        result_.resyncs = lines.resyncs();
+        result_.phases.push_back({"first-light lines", seconds_since(t)});
+        return {};
     }
 
-    if (config_.cancel && config_.cancel->requested()) {
-        return fault(Error{ErrorKind::cancelled,
-                           "interrupt observed after the calibration window; "
-                           "the film window will not start"});
+    // --- film window ---------------------------------------------------
+    t = Clock::now();
+    // Close the calibration window, then the film setup (OEM_RE.md §7).
+    if (auto r = device.acquire(false); !r) {
+        return r;
     }
-    // preparing_transport → transporting.
-    if (auto r = run_plan(commands, transport_frames_, "transport"); !r) {
-        return fail_plan(r);
+    if (auto r = device.reset_fifos(); !r) {
+        return r;
     }
-    if (auto s = session_.handle(ScanEvent::transport_prepared); !s) {
-        return fault(s.error());
+    const Geometry fg = film_geometry(mode, base.offset);
+    result_.film_geometry = fg;
+    if (auto r = device.fpga_settings(fg, integ); !r) {
+        return r;
     }
-    {
-        auto receiver =
-            image::ImageReceiver::create(config_.transport_completion, config_.read_bytes);
-        if (!receiver) {
-            return fault(receiver.error());
-        }
-        auto report = (*receiver)->run(images, result.film);
-        if (!report) {
-            return fault(report.error());
-        }
-        result.transport_report = *report;
-        log::Logger::instance().log(
-            log::Level::info,
-            "film window: {} rows, {} bytes, completion: {} ({})", report->rows,
-            report->bytes_received, report->completion,
-            result.film.geometry.samples_per_row);
+    const auto& cr = result_.corrections;
+    Duties film = cr.duties;
+    film.r = std::min(1.0, film.r * kBoostR);
+    film.g = std::min(1.0, film.g * kBoostG);
+    film.b = std::min(1.0, film.b * kBoostB);
+    if (auto r = device.lamp_on(true, mode.ir, cr.currents, integ, film); !r) {
+        return r;
     }
-    if (auto s = session_.handle(ScanEvent::completion_signalled); !s) {
-        return fault(s.error());
+    if (auto r = device.panel_leds(kLedIdle); !r) {
+        return r;
     }
-    if (auto s = session_.handle(ScanEvent::teardown_ready); !s) {
-        return fault(s.error());
+    const std::uint16_t rate = eeprom::motor_rate(base, mode.ir);
+    result_.motor_rate = rate;
+    if (auto r = check_cancel(config_.cancel, "before the film window"); !r) {
+        return r;
     }
+    if (auto r = device.motor_rate(rate); !r) {
+        return r;
+    }
+    if (auto r = device.motor_go(); !r) {
+        return r;
+    }
+    lines.set_stride(fg.samples_per_line(), fg.pixels());
+    if (auto r = device.acquire(true); !r) {
+        return r;
+    }
+    if (auto r = device.dx_start(dx_word(mode)); !r) {
+        return r;
+    }
+    if (auto r = device.panel_leds(kLedFilmArmed); !r) {
+        return r;
+    }
+    if (auto r = device.panel_leds(kLedScanning); !r) {
+        return r;
+    }
+    result_.phases.push_back({"film setup", seconds_since(t)});
 
-    // tearing_down → complete. This is the one teardown attempt of the
-    // success path: mark it so a failure here never re-enters the
-    // best-effort branch in fault().
-    teardown_attempted_ = true;
-    if (auto r = run_plan(commands, teardown_frames_, "teardown"); !r) {
-        return fail_plan(r);
+    t = Clock::now();
+    image::RawImage& img = result_.film;
+    img.geometry.samples_per_row = static_cast<std::uint32_t>(fg.samples_per_line());
+    FilmDetector detector(fg.pixels());
+    const auto window_start = Clock::now();
+    auto last_poll = Clock::now();
+    bool film_seen = false;
+    while (true) {
+        auto line = lines.next_line(config_.line_timeout);
+        if (!line) {
+            return line.error();
+        }
+        img.samples.insert(img.samples.end(), line->begin(), line->end());
+        const auto state = detector.feed(*line);
+        if (state == FilmDetector::State::in_film && !film_seen) {
+            film_seen = true;
+            if (auto r = device.panel_leds(kLedFilmSeen); !r) {
+                return r;
+            }
+        }
+        if (state == FilmDetector::State::ended) {
+            result_.film_end = FilmEnd::film_passed;
+            break;
+        }
+        if (img.rows() >= config_.film_row_budget) {
+            result_.film_end = FilmEnd::row_budget;
+            break;
+        }
+        if (!film_seen && Clock::now() - window_start >= config_.no_film_timeout) {
+            result_.film_end = FilmEnd::no_film_timeout;
+            break;
+        }
+        if (Clock::now() - last_poll >= config_.poll_interval) {
+            last_poll = Clock::now();
+            auto ev = device.poll_service();
+            if (!ev) {
+                return ev.error();
+            }
+            if (ev->pending) {
+                result_.events.push_back(std::format(
+                    "film window line {}: service light 0x{:02x}{}", img.rows(),
+                    ev->light_status,
+                    ev->dx_flags ? std::format(" DX flags 0x{:02x}", *ev->dx_flags) : ""));
+            }
+        }
+        if (auto c = check_cancel(config_.cancel, "during the film window"); !c) {
+            return c;
+        }
     }
-    if (auto s = session_.handle(ScanEvent::teardown_done); !s) {
-        return fault(s.error());
+    const double window_s = seconds_since(window_start);
+    // The HOST ends the window: acquire off (stream stops), LEDs.
+    if (auto r = device.panel_leds(kLedFilmEnd); !r) {
+        return r;
     }
-    return result;
+    if (auto r = device.acquire(false); !r) {
+        return r;
+    }
+    result_.film_start_line = detector.film_start();
+    result_.film_end_line = detector.film_end();
+    result_.resyncs = lines.resyncs();
+    result_.line_period_ms = img.rows() == 0 ? 0 : window_s * 1000.0 / static_cast<double>(img.rows());
+    result_.phases.push_back({"film window", seconds_since(t)});
+    return {};
 }
 
 } // namespace pakon::scan

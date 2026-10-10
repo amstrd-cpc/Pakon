@@ -2,8 +2,9 @@
 #
 # Layering (top depends on bottom):
 #   scanner → ppb → usb
-#   scan → image, protocol, ppb  (session plans + image reception; no I/O
-#   in session/plan, interfaces only in transport/runner)
+#   scan → stream, image, protocol, ppb, eeprom  (the OEM scan state
+#   machine over ICommandChannel + IImageStream; no direct USB I/O)
+#   stream → usb (IBulkInPipe only)
 #   bootstrap → usb   (cold-device read-only probe; no PPB involvement)
 #   all layers use errors/ and logging/
 # protocol/ is header-only constants, documented against pakon-reference.
@@ -16,12 +17,12 @@ set(PAKON_CORE_SOURCES
     ppb/packet.cpp
     ppb/client.cpp
     scanner/scanner.cpp
-    scan/session.cpp
-    scan/plan.cpp
+    scan/device.cpp
+    scan/lines.cpp
+    scan/corrections.cpp
     scan/runner.cpp
-    image/row_sync.cpp
-    image/reader.cpp
     image/raw_writer.cpp
+    image/tiff.cpp
     stream/image_stream.cpp
     eeprom/eeprom.cpp
 )

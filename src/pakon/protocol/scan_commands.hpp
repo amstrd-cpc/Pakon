@@ -1,288 +1,240 @@
 #pragma once
 
-// Typed frames for the scan sequence: motor engage/run/stop, lamp and
-// CCD configuration, scan-line triggers, service handling, and the
-// acquisition arm pair.
+// Typed frames for the scan path, named after the OEM driver functions
+// that send them (docs/OEM_RE.md §3 — register map recovered from
+// TLB.dll, every builder byte-checked against the capture corpus in
+// tests/scan/scan_commands_test.cpp).
 //
-// Every builder reproduces request forms observed verbatim in the
-// capture corpus (alibosworth/pakon-captures, F-135+ serial 16402,
-// ten OEM-driven sessions) and/or quoted in pakon-reference. Command
-// NAMES are working labels, not OEM identifiers (command-reference.md's
-// own marker). Two register names carry a reference-vs-capture-corpus
-// divergence and are called out inline below (0x80, 0x81).
+// Several older working labels were wrong and are gone: PICM 0x82 sub 0
+// is the CCD FPGA control register (not a motor speed; bit0 gates the
+// image stream), 0x91/0x92 are DX start/stop (not a scan trigger /
+// EndAcquisition), the "ARM pair" is bDrvResetFifos, PICM 0x82 sub 9 is
+// the front-panel LED register (not a "mux"), PICL 0x82 holds the LED
+// on-times (not a colour matrix).
 //
-// SAFETY: these builders only ever target the documented controller
-// addresses (protocol/addresses.hpp). Nothing here addresses the
-// bootloader (0x22/0x26/0x42/0x46) or the shifted EEPROM bus
-// (0xA2/0xA4); the PPB client's allow-list enforces that on the wire.
+// SAFETY: builders only take the documented controller addresses; the
+// PPB client's allow-list refuses the bootloader (0x22/0x26/0x42/0x46)
+// and EEPROM bus (0xA2/0xA4) addresses on the wire. TEC registers can
+// only carry the two OEM literals (tec_init()). LED currents are clamped
+// to the firmware ceilings by led_currents() itself.
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
-#include <span>
 
 #include "pakon/ppb/packet.hpp"
 #include "pakon/protocol/addresses.hpp"
-#include "pakon/protocol/commands.hpp"
 
 namespace pakon::protocol::scan {
 
-// --- Channel topology -------------------------------------------------
-// Command frames ride bulk OUT 0x01 / bulk IN 0x81; pixel data rides
-// bulk IN 0x86 (image/source.hpp). The capture corpus's bridge
-// constants: EP_CMD_OUT, EP_CMD_IN, EP_IMG_IN = 0x01, 0x81, 0x86.
-inline constexpr std::uint8_t kCommandOutEndpoint = 0x01;
-inline constexpr std::uint8_t kCommandInEndpoint = 0x81;
+inline constexpr std::uint8_t kImageEndpoint = 0x86;
 
-// --- Motor (PICM) indexed writes --------------------------------------
-//
-// 0x82/0x84 writes carry a sub-register index as their first payload
-// byte (capture corpus: `02 06 44 03 82 <sub> <lo> <hi>`). Sub-index
-// meanings beyond "0 = the run/idle speed word" are NOT established by
-// pakon-reference; the labels below are the capture corpus's own
-// bridge labels (pakon-captures/bridge/ppb.py, transcribed from
-// PakonKit — that table's own caveat: names from observed traffic, not
-// OEM identifiers).
-enum class SpeedSubRegister : std::uint8_t {
-    run = 0x00,         // run/idle speed word; sub-0 carries run/stop state
-    offset = 0x04,      // "offset"; the per-resolution EEPROM Offset word
-                        // lands here in the captures
-    offset_width = 0x05, // "offset+width"
-    integration = 0x06,  // "integration"
-    mux = 0x09,         // "mux"; the only 0x82 write seen mid-transport
-    idx10 = 0x0A,       // semantics unresolved
-    idx11 = 0x0B,       // semantics unresolved
+// --- HOST / FIFO -------------------------------------------------------
+
+// bDrvResetFifos (TLB@0x1000a730): HOST 0x84 = 02, then PICL CMD 0x8A.
+inline std::array<ppb::Frame, 2> reset_fifos(const ControllerAddresses& a) {
+    return {ppb::make_write(kAddrHost, 0x84, std::array<std::uint8_t, 1>{0x02}),
+            ppb::make_cmd(a.light, 0x8A)};
+}
+
+// --- PICL: lamp --------------------------------------------------------
+
+inline ppb::Frame lamp_mask(std::uint8_t light, bool visible, bool ir) {
+    const auto bits = static_cast<std::uint8_t>((visible ? 1 : 0) | (ir ? 2 : 0));
+    return ppb::make_write(light, 0x80, std::array<std::uint8_t, 1>{bits});
+}
+
+struct LedCurrents {
+    std::uint8_t r{0};
+    std::uint8_t g{0};
+    std::uint8_t b{0};
+    std::uint8_t ir{0};
 };
 
-enum class ConfigSubRegister : std::uint8_t {
-    idx0 = 0x00,
-    idx1 = 0x01,
-    ad_gain_r = 0x02,     // A/D gain R
-    ad_gain_g = 0x03,
-    ad_gain_b = 0x04,
-    offset_trim_r = 0x05, // offset trim R
-    offset_trim_g = 0x06,
-    offset_trim_b = 0x07,
-};
-
-inline ppb::Frame motor_speed(std::uint8_t address, SpeedSubRegister sub,
-                              std::uint16_t value) {
-    return ppb::make_write(address, to_byte(MotorCommand::set_motor_speed),
-                           std::array<std::uint8_t, 3>{
-                               static_cast<std::uint8_t>(sub),
-                               static_cast<std::uint8_t>(value & 0xFF),
-                               static_cast<std::uint8_t>((value >> 8) & 0xFF)});
-}
-
-inline ppb::Frame motor_speed(std::uint8_t address, std::uint8_t sub,
-                              std::uint16_t value) {
-    return ppb::make_write(address, to_byte(MotorCommand::set_motor_speed),
-                           std::array<std::uint8_t, 3>{
-                               sub, static_cast<std::uint8_t>(value & 0xFF),
-                               static_cast<std::uint8_t>((value >> 8) & 0xFF)});
-}
-
-inline ppb::Frame motor_config(std::uint8_t address, ConfigSubRegister sub,
-                               std::uint16_t value) {
-    return ppb::make_write(address, to_byte(MotorCommand::set_motor_config),
-                           std::array<std::uint8_t, 3>{
-                               static_cast<std::uint8_t>(sub),
-                               static_cast<std::uint8_t>(value & 0xFF),
-                               static_cast<std::uint8_t>((value >> 8) & 0xFF)});
-}
-
-inline ppb::Frame motor_config(std::uint8_t address, std::uint8_t sub,
-                               std::uint16_t value) {
-    return ppb::make_write(address, to_byte(MotorCommand::set_motor_config),
-                           std::array<std::uint8_t, 3>{
-                               sub, static_cast<std::uint8_t>(value & 0xFF),
-                               static_cast<std::uint8_t>((value >> 8) & 0xFF)});
-}
-
-// 0xA5, 2-byte payload, little-endian: the EEPROM MotorSpeed word for
-// the unit (capture: base4 `7e 64` = 0x647E). Units not established.
-inline ppb::Frame motor_calibration(std::uint8_t address, std::uint16_t word) {
-    return ppb::make_write(address, to_byte(MotorCommand::set_motor_calibration),
-                           std::array<std::uint8_t, 2>{
-                               static_cast<std::uint8_t>(word & 0xFF),
-                               static_cast<std::uint8_t>((word >> 8) & 0xFF)});
-}
-
-inline ppb::Frame engage(std::uint8_t address) {
-    return ppb::make_cmd(address, to_byte(MotorCommand::engage_film_drive));
-}
-
-inline ppb::Frame stop_drive(std::uint8_t address) {
-    return ppb::make_cmd(address, to_byte(MotorCommand::stop_film_drive));
-}
-
-inline ppb::Frame disengage(std::uint8_t address) {
-    return ppb::make_cmd(address, to_byte(MotorCommand::disengage_film_drive));
-}
-
-inline ppb::Frame reset_motor(std::uint8_t address) {
-    return ppb::make_cmd(address, to_byte(MotorCommand::reset_motor));
-}
-
-inline ppb::Frame init_motor(std::uint8_t address, std::uint8_t value = 0x01) {
-    return ppb::make_write(address, to_byte(MotorCommand::init_motor),
-                           std::array<std::uint8_t, 1>{value});
-}
-
-// --- Light (PICL) ------------------------------------------------------
-
-// Lamp mask, register 0x80. REFERENCE-vs-CAPTURE DIVERGENCE:
-// pakon-reference's command table calls 0x80 "SetCcdConfig … general
-// CCD config", while the capture corpus's bridge decodes it as the
-// lamp mask (bit0 = visible, bit1 = IR; PakonKit docs/PROTOCOL.md) and
-// the captures themselves only ever write 00/01/02/03 there — exactly
-// the four visible/IR combinations, with 01 before the calibration
-// window and 00 at teardown ("lamp-off" in the bridge's narration).
-// The lamp-mask reading is the one the payload values support.
-struct LampMask {
-    bool visible{false};
-    bool ir{false};
-};
-
-inline ppb::Frame lamp_mask(std::uint8_t address, LampMask mask) {
-    std::uint8_t bits = 0;
-    if (mask.visible) {
-        bits |= 0x01;
+// The firmware's own ceilings (TLB@0x100203c0, identical to the bridge's
+// LED_CEILINGS): by board (PICM address) and IR state. An unknown board
+// gets the strictest value of every column.
+inline LedCurrents led_ceiling(std::uint8_t motor_address, bool ir_lit) {
+    if (motor_address == kAddrPicmPlus) {
+        return ir_lit ? LedCurrents{8, 24, 24, 8} : LedCurrents{4, 20, 20, 0};
     }
-    if (mask.ir) {
-        bits |= 0x02;
+    if (motor_address == kAddrPicm) {
+        return ir_lit ? LedCurrents{8, 8, 8, 8} : LedCurrents{6, 8, 8, 0};
     }
-    return ppb::make_write(address, to_byte(LightCommand::set_ccd_config),
-                           std::array<std::uint8_t, 1>{bits});
+    return LedCurrents{4, 8, 8, 0};
 }
 
-// LED current, register 0x81, 5-byte payload [B, IR, R, _, G].
-// REFERENCE-vs-CAPTURE DIVERGENCE: the reference table calls 0x81
-// "SetCcdGainOffset" ([INFERRED layout]); the capture corpus's bridge
-// labels it "LED CURRENT" with the slot order above, and its LED
-// ceiling clamp operates on exactly these writes. The clamp context
-// supports the LED-current reading.
-inline ppb::Frame led_current(std::uint8_t address,
-                              const std::array<std::uint8_t, 5>& currents) {
-    return ppb::make_write(address, to_byte(LightCommand::set_ccd_gain_offset),
-                           currents);
+inline LedCurrents clamp_currents(LedCurrents c, LedCurrents ceiling) {
+    return {std::min(c.r, ceiling.r), std::min(c.g, ceiling.g), std::min(c.b, ceiling.b),
+            std::min(c.ir, ceiling.ir)};
 }
 
-inline ppb::Frame ccd_exposure_b(std::uint8_t address,
-                                 const std::array<std::uint8_t, 4>& timing) {
-    return ppb::make_write(address, to_byte(LightCommand::set_ccd_exposure_b), timing);
+// Register 0x81, payload [B, IR, R, 0, G]; always clamped.
+inline ppb::Frame led_currents(std::uint8_t light, LedCurrents c, LedCurrents ceiling) {
+    c = clamp_currents(c, ceiling);
+    return ppb::make_write(light, 0x81, std::array<std::uint8_t, 5>{c.b, c.ir, c.r, 0, c.g});
 }
 
-inline ppb::Frame ccd_exposure_g(std::uint8_t address,
-                                 const std::array<std::uint8_t, 4>& timing) {
-    return ppb::make_write(address, to_byte(LightCommand::set_ccd_exposure_g), timing);
+struct LedOnTimes {
+    std::uint16_t r{0};
+    std::uint16_t g{0};
+    std::uint16_t b{0};
+    std::uint16_t ir{0};
+    std::uint16_t base{0};
+};
+
+// Register 0x82 (PICL), six u16 [B, IR, R, 0, G, base] (TLB@0x1002c5f0).
+inline ppb::Frame led_on_times(std::uint8_t light, const LedOnTimes& t) {
+    std::array<std::uint8_t, 12> p{};
+    const std::uint16_t v[6] = {t.b, t.ir, t.r, 0, t.g, t.base};
+    for (std::size_t i = 0; i < 6; ++i) {
+        p[2 * i] = static_cast<std::uint8_t>(v[i] & 0xFF);
+        p[2 * i + 1] = static_cast<std::uint8_t>(v[i] >> 8);
+    }
+    return ppb::make_write(light, 0x82, p);
 }
 
-inline ppb::Frame ccd_exposure_r(std::uint8_t address,
-                                 const std::array<std::uint8_t, 4>& timing) {
-    return ppb::make_write(address, to_byte(LightCommand::set_ccd_exposure_r), timing);
+// The on-time base for an integration time: round(integration × 0.24),
+// fitted on four F-135+ configurations (1875→450, 1250→300, 2813→675,
+// 4093→982; OEM_RE.md §9), integration clamped to 0xFFD.
+inline std::uint16_t on_time_base(std::uint16_t integration) {
+    return static_cast<std::uint16_t>(std::lround(std::min<double>(integration, 0xFFD) * 0.24));
 }
 
-// Register 0x8F. The reference table lists a 2-byte payload; the
-// captures write 4 bytes there (`8f e8 ff 18 00`, `8f e0 ff 20 00` …).
-// Replay capture-exact lengths, not the table's.
-inline ppb::Frame light_config(std::uint8_t address,
-                               const std::array<std::uint8_t, 4>& config) {
-    return ppb::make_write(address, to_byte(LightCommand::set_light_config), config);
+// Each channel's on-time = round(base × duty), at most base − 2.
+inline std::uint16_t on_time(std::uint16_t base, double duty) {
+    duty = std::clamp(duty, 0.0, 1.0);
+    const long v = std::lround(base * duty);
+    return static_cast<std::uint16_t>(std::clamp<long>(v, 0, std::max<long>(base - 2, 0)));
 }
 
-inline ppb::Frame light_power(std::uint8_t address,
-                              const std::array<std::uint8_t, 2>& power) {
-    return ppb::make_write(address, to_byte(LightCommand::set_light_power), power);
+// --- PICL: status / service -----------------------------------------------
+
+inline ppb::Frame read_interrupt_status(std::uint8_t address) {
+    return ppb::make_read(address, 1, 0x02);
 }
 
-inline ppb::Frame color_matrix(std::uint8_t address,
-                               const std::array<std::uint8_t, 12>& matrix) {
-    return ppb::make_write(address, to_byte(LightCommand::set_color_matrix), matrix);
+// Acknowledge: WRITE reg 0x06 [00][status], status 0 acked as ff
+// (TLB@0x1000bdd0; captured 00 02 / 00 20 / 00 22).
+inline ppb::Frame interrupt_ack(std::uint8_t address, std::uint8_t status) {
+    const std::uint8_t st = status == 0 ? std::uint8_t{0xFF} : status;
+    return ppb::make_write(address, 0x06, std::array<std::uint8_t, 2>{0x00, st});
 }
 
-inline ppb::Frame enable_scan(std::uint8_t address, std::uint8_t value) {
-    return ppb::make_write(address, to_byte(LightCommand::enable_scan),
-                           std::array<std::uint8_t, 1>{value});
+inline ppb::Frame read_dx_records(std::uint8_t light) { return ppb::make_read(light, 30, 0x90); }
+inline ppb::Frame read_lamp_flags(std::uint8_t light) { return ppb::make_read(light, 1, 0x83); }
+inline ppb::Frame read_lamp_setpoint(std::uint8_t light) { return ppb::make_read(light, 2, 0x84); }
+inline ppb::Frame read_lamp_temperatures(std::uint8_t light) {
+    return ppb::make_read(light, 4, 0x88);
 }
 
-// TEC: replay OEM values verbatim only (commands.hpp TEC caution).
-inline ppb::Frame tec_setpoint(std::uint8_t address, std::uint8_t value) {
-    return ppb::make_write(address, to_byte(LightCommand::set_tec_1),
-                           std::array<std::uint8_t, 1>{value});
+// --- PICL: init and DX ------------------------------------------------------
+
+// bDrvInitLampTemperatures (TLB@0x1002d190): four 4-byte temperature
+// limit registers, the OEM registry defaults replayed as captured
+// (base4.jsonl 6.605-6.613, identical in all six sessions).
+inline std::array<ppb::Frame, 4> lamp_temperature_init(std::uint8_t light) {
+    return {ppb::make_write(light, 0x8F, std::array<std::uint8_t, 4>{0xE8, 0xFF, 0x18, 0x00}),
+            ppb::make_write(light, 0x8C, std::array<std::uint8_t, 4>{0xE0, 0xFF, 0x20, 0x00}),
+            ppb::make_write(light, 0x8B, std::array<std::uint8_t, 4>{0xF0, 0x00, 0x20, 0x03}),
+            ppb::make_write(light, 0x8D, std::array<std::uint8_t, 4>{0xA0, 0x00, 0x70, 0x03})};
 }
 
-inline ppb::Frame tec_enable(std::uint8_t address, std::uint8_t value) {
-    return ppb::make_write(address, to_byte(LightCommand::set_tec_2),
-                           std::array<std::uint8_t, 1>{value});
+// TEC: the two literals inside bDrvInitLampTemperatures, nothing else.
+inline std::array<ppb::Frame, 2> tec_init(std::uint8_t light) {
+    return {ppb::make_write(light, 0xD0, std::array<std::uint8_t, 1>{0x00}),
+            ppb::make_write(light, 0xD1, std::array<std::uint8_t, 1>{0x01})};
 }
 
-// Scan-line trigger, register 0x91, 3-byte payload:
-// [le16 ScanLineParams value][0x01]. The third byte is 0x01 in all 12
-// captured triggers (six configurations, two triggers each) — a
-// capture-verified constant, semantics unknown. The trigger resets the
-// scanner's line counter / arms the window (capture corpus bridge:
-// "TRIGGER (line ctr reset, EP6 starts)"); issued once per window.
-inline ppb::Frame scan_trigger(std::uint8_t address, ScanLineParams params,
-                               std::uint8_t tail = 0x01) {
-    const auto value = static_cast<std::uint16_t>(params);
-    return ppb::make_write(address, to_byte(LightCommand::set_scan_line_params),
-                           std::array<std::uint8_t, 3>{
-                               static_cast<std::uint8_t>(value & 0xFF),
-                               static_cast<std::uint8_t>((value >> 8) & 0xFF), tail});
+inline ppb::Frame lamp_power_init(std::uint8_t light) { // 0x87 = 00 00 (bDrvInitCcd)
+    return ppb::make_write(light, 0x87, std::array<std::uint8_t, 2>{0x00, 0x00});
 }
 
-// HostReady: WRITE HOST reg 0x84, 1-byte payload 02. Pairs with
-// AcquireLine ("the ARM pair"): HostReady immediately precedes every
-// AcquireLine in all captures [capture-evidenced; the reference marks
-// the pairing INFERRED].
-inline ppb::Frame host_ready(std::uint8_t address) {
-    return ppb::make_write(address, to_byte(HostCommand::host_ready),
-                           std::array<std::uint8_t, 1>{0x02});
+inline ppb::Frame resample(std::uint8_t light, bool three_quarters) { // 0x89
+    const std::uint8_t v = three_quarters ? 1 : 0;
+    return ppb::make_write(light, 0x89, std::array<std::uint8_t, 1>{v});
 }
 
-inline ppb::Frame acquire_line(std::uint8_t address) {
-    return ppb::make_cmd(address, to_byte(LightCommand::acquire_line));
+// bDrvDxStart (TLB@0x1000a7b0): [u16 DX word][flag]; flag 0x01 in all
+// twelve captured writes.
+inline ppb::Frame dx_start(std::uint8_t light, std::uint16_t word, std::uint8_t flag = 0x01) {
+    return ppb::make_write(light, 0x91,
+                           std::array<std::uint8_t, 3>{static_cast<std::uint8_t>(word & 0xFF),
+                                                       static_cast<std::uint8_t>(word >> 8), flag});
 }
 
-inline ppb::Frame end_acquisition(std::uint8_t address) {
-    return ppb::make_cmd(address, to_byte(LightCommand::end_acquisition));
+inline ppb::Frame dx_stop(std::uint8_t light) { return ppb::make_cmd(light, 0x92); }
+
+// --- PICM: CCD FPGA (0x82 sub) ------------------------------------------------
+
+enum class Fpga : std::uint8_t {
+    control = 0,
+    reg1 = 1,
+    reg2 = 2,
+    reg3 = 3,
+    pixel_start = 4,
+    pixel_end = 5,
+    integration = 6,
+    panel_leds = 9,
+    reg10 = 10,
+    reg11 = 11,
+};
+
+// Control-register bits (TLB@0x10029770 / 0x10029810 / 0x10029860).
+inline constexpr std::uint16_t kControlAcquire = 0x0001;
+inline constexpr std::uint16_t kControlBinning = 0x0002; // Base 4
+inline constexpr std::uint16_t kControlInit = 0x0060;    // set once at init
+inline constexpr std::uint16_t kControlIr = 0x0100;
+
+inline ppb::Frame fpga(std::uint8_t motor, Fpga sub, std::uint16_t value) {
+    return ppb::make_write(motor, 0x82,
+                           std::array<std::uint8_t, 3>{static_cast<std::uint8_t>(sub),
+                                                       static_cast<std::uint8_t>(value & 0xFF),
+                                                       static_cast<std::uint8_t>(value >> 8)});
 }
 
-// --- Service handling --------------------------------------------------
+// --- PICM: CCD A/D (0x84 sub) --------------------------------------------------
 
-inline ppb::Frame read_service_status(std::uint8_t address) {
-    return ppb::make_read(address, 1, to_byte(LightCommand::read_service_status));
+enum class Channel : std::uint8_t { r = 0, g = 1, b = 2 };
+
+inline ppb::Frame ad_register(std::uint8_t motor, std::uint8_t sub, std::uint16_t value) {
+    return ppb::make_write(motor, 0x84,
+                           std::array<std::uint8_t, 3>{sub, static_cast<std::uint8_t>(value & 0xFF),
+                                                       static_cast<std::uint8_t>(value >> 8)});
 }
 
-// Service ack: WRITE PICL reg 0x06, payload 00 02 (capture-exact).
-inline ppb::Frame service_ack(std::uint8_t address) {
-    return ppb::make_write(address, to_byte(LightCommand::write_service_ack),
-                           std::array<std::uint8_t, 2>{0x00, 0x02});
+// Gain code for an amplification g (TLB@0x100201d0): round((1 − 1/g) ×
+// 75.6), g clamped to [1, 6]. 1.2 → 13 (0x0D, captured).
+inline std::uint16_t gain_code(double g) {
+    g = std::clamp(g, 1.0, 6.0);
+    return static_cast<std::uint16_t>(std::lround((1.0 - 1.0 / g) * 75.6));
 }
 
-inline ppb::Frame read_sensor_data(std::uint8_t address) {
-    return ppb::make_read(address, 30, to_byte(LightCommand::read_sensor_data));
+inline ppb::Frame ad_gain(std::uint8_t motor, Channel c, std::uint16_t code) {
+    return ad_register(motor, static_cast<std::uint8_t>(2 + static_cast<int>(c)),
+                       std::min<std::uint16_t>(code, 0x3F));
 }
 
-inline ppb::Frame read_ccd_status(std::uint8_t address) {
-    return ppb::make_read(address, 1, to_byte(LightCommand::read_ccd_status));
+// Sign-magnitude offset (TLB@0x100299c0): |v| ≤ 255, bit 8 = negative.
+inline std::uint16_t encode_offset(int v) {
+    v = std::clamp(v, -255, 255);
+    return static_cast<std::uint16_t>(v < 0 ? (0x100 | -v) : v);
 }
 
-inline ppb::Frame read_light_status(std::uint8_t address) {
-    return ppb::make_read(address, 2, to_byte(LightCommand::read_light_status));
+inline ppb::Frame ad_offset(std::uint8_t motor, Channel c, int offset) {
+    return ad_register(motor, static_cast<std::uint8_t>(5 + static_cast<int>(c)),
+                       encode_offset(offset));
 }
 
-inline ppb::Frame read_temperature(std::uint8_t address) {
-    return ppb::make_read(address, 4, to_byte(LightCommand::read_temperature));
-}
+// --- PICM: motor -------------------------------------------------------------
 
-// True when a READ reg 0x02 reply reports "wants service" (payload
-// byte 0x02; commands.hpp; capture corpus: idle replies carry payload
-// 00 with flags 0x08, service replies carry payload 02 with flags
-// 0x88 — the 0x80 event bit OR-ed on).
-inline bool service_requested(const ppb::Reply& reply) {
-    return ppb::is_read_success(reply) && reply.payload.size() >= 1 &&
-           reply.payload[0] == 0x02;
+inline ppb::Frame motor_rate(std::uint8_t motor, std::uint16_t rate) { // 0xA5
+    return ppb::make_write(motor, 0xA5,
+                           std::array<std::uint8_t, 2>{static_cast<std::uint8_t>(rate & 0xFF),
+                                                       static_cast<std::uint8_t>(rate >> 8)});
 }
+inline ppb::Frame motor_go(std::uint8_t motor) { return ppb::make_cmd(motor, 0xA0); }
+inline ppb::Frame motor_stop(std::uint8_t motor) { return ppb::make_cmd(motor, 0xA2); }
 
 } // namespace pakon::protocol::scan

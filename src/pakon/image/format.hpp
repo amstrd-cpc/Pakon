@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace pakon::image {
 
@@ -53,5 +54,17 @@ inline RgbWindow rgb_window_for(std::uint32_t samples_per_row,
     }
     return {pixel_phase, (samples_per_row - pixel_phase) / 3};
 }
+
+// One window in memory: rows of little-endian 16-bit samples, row-major,
+// marker-aligned (one row = one CCD line). `samples` holds exactly
+// rows * geometry.samples_per_row samples.
+struct RawImage {
+    RowGeometry geometry;
+    std::vector<std::uint16_t> samples;
+
+    std::size_t rows() const {
+        return geometry.samples_per_row == 0 ? 0 : samples.size() / geometry.samples_per_row;
+    }
+};
 
 } // namespace pakon::image

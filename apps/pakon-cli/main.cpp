@@ -578,7 +578,7 @@ int main(int argc, char** argv) {
             return 0;
         } else if (command.empty()) {
             command = arg;
-        } else if (command == "scan") {
+        } else if (command == "scan" || command == "eeprom") {
             // Everything after `scan` belongs to the scan command's own
             // argument validation (scan_cli.cpp); it decides usage
             // errors before any device entry point can run.
@@ -625,6 +625,12 @@ int main(int argc, char** argv) {
         pakon::cli::ScanCliDeps deps;
         deps.open_session = &open_live_session;
         return pakon::cli::run_scan_command(scan_args, deps, stdout, stderr);
+    }
+    if (command == "eeprom") {
+        // Read-only: the allow-listed 0xA4 read-select and 0xA9 reads.
+        pakon::cli::ScanCliDeps deps;
+        deps.open_session = &open_live_session;
+        return pakon::cli::run_eeprom_command(scan_args, deps, stdout, stderr);
     }
 
     std::fprintf(stderr, "error: unknown command '%s'\n",
