@@ -18,6 +18,7 @@
 #include "pakon/image/raw_writer.hpp"
 #include "pakon/image/tiff.hpp"
 #include "pakon/scan/runner.hpp"
+#include "pakon/scan/sidecar.hpp"
 #include "pakon/stream/image_stream.hpp"
 
 namespace pakon::cli {
@@ -159,12 +160,13 @@ struct Outputs {
     std::string raw;
     std::string tiff;
     std::string text;
+    std::string json;
 };
 
 Outputs outputs_for(const Options& o) {
     const std::string kind = o.first_light ? "white" : "film";
     return {o.out_prefix + "." + kind + ".pakraw", o.out_prefix + "." + kind + ".tiff",
-            o.out_prefix + ".scan-stats.txt"};
+            o.out_prefix + ".scan-stats.txt", o.out_prefix + ".scan.json"};
 }
 
 void print_preflight(const Options& o, std::FILE* out) {
@@ -202,8 +204,10 @@ void print_preflight(const Options& o, std::FILE* out) {
                  stream::kQueuedReads, stream::kTransferBytes, stream::kRingBytes >> 20);
     std::fprintf(out, "geometry:       calibration pixels %u..Offset+%u, film Offset..Offset+%u%s\n",
                  mc.cal_start, mc.width, mc.width, mc.resample ? " (3/4 resample)" : "");
-    std::fprintf(out, "outputs:        %s\n                %s (preview)\n                %s\n",
-                 outputs.raw.c_str(), outputs.tiff.c_str(), outputs.text.c_str());
+    std::fprintf(out, "outputs:        %s\n                %s (preview)\n                %s\n"
+                      "                %s (settings, calibration references)\n",
+                 outputs.raw.c_str(), outputs.tiff.c_str(), outputs.text.c_str(),
+                 outputs.json.c_str());
     const auto init = scan::ScanRunner::init_frames(a);
     std::fprintf(out, "\nphases (exact frames where fixed):\n");
     std::fprintf(out, "  1 init block (%zu frames, byte-identical to base4.jsonl 0.951-1.067):\n",
@@ -431,6 +435,13 @@ int run_live(const Options& o, const ScanCliDeps& deps, std::FILE* out, std::FIL
         } else {
             std::fprintf(out, "written: %s (linear RGB preview, unprocessed)\n", outputs.tiff.c_str());
         }
+    }
+    // Everything later processing needs besides the pixels (scan/sidecar.hpp).
+    if (std::FILE* f = std::fopen(outputs.json.c_str(), "w")) {
+        const auto json = scan::sidecar_json(r);
+        std::fwrite(json.data(), 1, json.size(), f);
+        std::fclose(f);
+        std::fprintf(out, "written: %s\n", outputs.json.c_str());
     }
     if (std::FILE* f = std::fopen(outputs.text.c_str(), "w")) {
         print_unit(f, unit, o.scan_mode);

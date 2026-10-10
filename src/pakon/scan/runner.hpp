@@ -71,6 +71,7 @@ struct ScanResult {
     std::uint16_t motor_rate{0};
     Geometry film_geometry{};
     CorrectionsResult corrections{};
+    Duties film_duties{};   // on-time fractions used for the film window
     image::RawImage white;  // first-light: white lines at the final settings
     image::RawImage film;   // film window lines, as streamed
     FilmEnd film_end{FilmEnd::none};

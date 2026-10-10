@@ -280,6 +280,7 @@ VoidResult ScanRunner::run_phases(ScanDevice& device, stream::IImageStream& stre
     film.r = std::min(1.0, film.r * kBoostR);
     film.g = std::min(1.0, film.g * kBoostG);
     film.b = std::min(1.0, film.b * kBoostB);
+    result_.film_duties = film;
     if (auto r = device.lamp_on(true, mode.ir, cr.currents, integ, film); !r) {
         return r;
     }

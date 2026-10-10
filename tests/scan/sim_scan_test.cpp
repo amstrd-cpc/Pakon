@@ -17,6 +17,7 @@
 #include "pakon/eeprom/eeprom.hpp"
 #include "pakon/ppb/client.hpp"
 #include "pakon/scan/runner.hpp"
+#include "pakon/scan/sidecar.hpp"
 #include "pakon/stream/image_stream.hpp"
 #include "support/sim_device.hpp"
 #include "support/test_harness.hpp"
@@ -318,6 +319,18 @@ PAKON_TEST(first_light_keeps_dark_and_white_lines_and_never_moves_the_motor) {
                            ((f[0] == 0x04 && (f[4] == 0xA0 || f[4] == 0xA1)) ||
                             (f[0] == 0x02 && f[4] == 0xA5));
         EXPECT(!motor);
+    }
+    // The sidecar carries the calibration references for later processing.
+    const auto json = scan::sidecar_json(o.result);
+    EXPECT(json.find("\"schema\":\"pakon-scan/1\"") != std::string::npos);
+    EXPECT(json.find("\"serial\":17373") != std::string::npos);
+    EXPECT(json.find("\"dark\":{\"lines\":32,\"pixels\":1025,\"planes\":[[") != std::string::npos);
+    EXPECT(json.find("\"white\":{\"lines\":32") != std::string::npos);
+    if (const char* dir = std::getenv("PAKON_SESSION_DIR")) {
+        if (std::FILE* f = std::fopen((std::string(dir) + "/first_light.scan.json").c_str(), "w")) {
+            std::fwrite(json.data(), 1, json.size(), f);
+            std::fclose(f);
+        }
     }
     expect_teardown_exactly_once(o);
     expect_safe_end(o);

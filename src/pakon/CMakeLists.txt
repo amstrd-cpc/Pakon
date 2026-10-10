@@ -21,6 +21,7 @@ set(PAKON_CORE_SOURCES
     scan/lines.cpp
     scan/corrections.cpp
     scan/runner.cpp
+    scan/sidecar.cpp
     image/raw_writer.cpp
     image/tiff.cpp
     stream/image_stream.cpp
