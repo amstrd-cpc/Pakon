@@ -1,8 +1,11 @@
 #include "pakon/image/raw_writer.hpp"
 
 #include <array>
+#include <cstdint>
 #include <format>
 #include <fstream>
+#include <span>
+#include <string>
 #include <vector>
 
 namespace pakon::image {

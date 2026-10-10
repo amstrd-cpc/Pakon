@@ -14,6 +14,9 @@ option(PAKON_BUILD_APPS "Build command-line applications" ON)
 
 if(MSVC)
     add_compile_options(/W4 /permissive- /Zc:__cplusplus)
+    # std::fopen/std::getenv are standard C++; MSVC's C4996 "unsafe"
+    # deprecation of them is not a defect here.
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 else()
     add_compile_options(-Wall -Wextra)
 endif()
