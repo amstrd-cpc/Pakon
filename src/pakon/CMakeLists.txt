@@ -23,6 +23,7 @@ set(PAKON_CORE_SOURCES
     image/reader.cpp
     image/raw_writer.cpp
     stream/image_stream.cpp
+    eeprom/eeprom.cpp
 )
 
 if(WIN32)
