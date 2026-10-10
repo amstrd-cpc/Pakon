@@ -29,7 +29,8 @@ public:
 
     // Wire a literal request hex (as in the captures) to a literal reply.
     void expect(std::string_view request_hex, std::string_view reply_hex) {
-        auto request = from_hex(request_hex);
+        const auto bytes = from_hex(request_hex);
+        const std::string request(bytes.begin(), bytes.end());
         auto reply = from_hex(reply_hex);
         unseen_.insert(request);
         handlers_[request] =
@@ -53,7 +54,7 @@ public:
     command_exchange(std::span<const std::uint8_t> frame) override {
         sent_.emplace_back(frame.begin(), frame.end());
 
-        if (auto it = handlers_.find(std::vector<std::uint8_t>(frame.begin(), frame.end()));
+        if (auto it = handlers_.find(std::string(frame.begin(), frame.end()));
             it != handlers_.end()) {
             unseen_.erase(it->first);
             return it->second(frame);
@@ -105,9 +106,11 @@ public:
 
 private:
     usb::DeviceInfo info_{}; // tests do not inspect descriptors
-    std::map<std::vector<std::uint8_t>, Handler> handlers_;
+    // Keyed by the frame bytes as a string: std::vector<uint8_t>'s <=>
+    // trips a GCC 16 -Wstringop-overread false positive at -O2.
+    std::map<std::string, Handler> handlers_;
     std::vector<std::pair<std::vector<std::uint8_t>, Handler>> prefix_handlers_;
-    std::set<std::vector<std::uint8_t>> unseen_;
+    std::set<std::string> unseen_;
     std::vector<std::vector<std::uint8_t>> sent_;
 };
 

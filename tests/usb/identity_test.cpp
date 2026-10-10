@@ -287,7 +287,7 @@ PAKON_TEST(winusb_pipe_deadline_covers_image_endpoint) {
     const std::string text = contents.str();
 
     EXPECT(text.find("PIPE_TRANSFER_TIMEOUT") != std::string::npos);
-    EXPECT(text.find("image::kImageEndpoint") != std::string::npos);
+    EXPECT(text.find("protocol::scan::kImageEndpoint") != std::string::npos);
     // The --idle-reads wait is computed from this value: the backend
     // must read the shared constant, never fork its own literal.
     EXPECT(text.find("kPipeTimeoutMs") != std::string::npos);

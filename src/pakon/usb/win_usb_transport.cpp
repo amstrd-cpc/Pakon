@@ -7,20 +7,24 @@
 //     reads it in transfers up to 0x5000 (20480) bytes (docs/image-stream.md)
 //   - vendor control requests 0xA4/0xA9 for EEPROM reads
 //     (docs/calibration.md sec. The read)
+//   - image pipe 0x86: N overlapped reads kept queued with RAW_IO, the
+//     user-mode equivalent of the OEM driver's queued reads into its ring
+//     (docs/OEM_RE.md §6, F135usb2.sys@0x11634)
 
 #ifdef _WIN32
 
 #include "pakon/usb/transport.hpp"
 #include "pakon/usb/win_usb_open.hpp"
-// image::kImageEndpoint: the pipe deadline below must also cover the
-// image pipe, and this header is its single source of truth.
-#include "pakon/image/source.hpp"
+#include "pakon/eeprom/eeprom.hpp"
 #include "pakon/logging/logger.hpp"
+#include "pakon/protocol/scan_commands.hpp"
+#include "pakon/usb/bulk_pipe.hpp"
 
 #include <windows.h>
 #include <winusb.h>
 
 #include <array>
+#include <deque>
 #include <format>
 
 namespace pakon::usb {
@@ -58,6 +62,118 @@ std::string win32_error_text(DWORD error) {
     }
     return text;
 }
+
+// Overlapped reads on one bulk IN pipe. Bulk IN transfers on a pipe
+// complete in the order they were queued, so completions are handed out
+// in submission order (the stream appends them to its ring in that
+// order). Image bytes are never logged.
+class WinUsbBulkInPipe final : public IBulkInPipe {
+public:
+    WinUsbBulkInPipe(WINUSB_INTERFACE_HANDLE usb, std::uint8_t endpoint, std::size_t slots)
+        : usb_(usb), endpoint_(endpoint), slots_(slots) {}
+
+    ~WinUsbBulkInPipe() override {
+        if (!queue_.empty()) {
+            WinUsb_AbortPipe(usb_, endpoint_);
+            // The buffers belong to the caller: retire every read before
+            // the OVERLAPPED structures go away.
+            for (const std::size_t slot : queue_) {
+                WaitForSingleObject(slots_[slot].ov.hEvent, 5000);
+            }
+        }
+        for (auto& s : slots_) {
+            if (s.ov.hEvent != nullptr) {
+                CloseHandle(s.ov.hEvent);
+            }
+        }
+    }
+
+    WinUsbBulkInPipe(const WinUsbBulkInPipe&) = delete;
+    WinUsbBulkInPipe& operator=(const WinUsbBulkInPipe&) = delete;
+
+    VoidResult init() {
+        for (auto& s : slots_) {
+            s.ov.hEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+            if (s.ov.hEvent == nullptr) {
+                return void_failure(ErrorKind::usb_io_failed,
+                                    std::format("CreateEvent failed: {}", GetLastError()));
+            }
+        }
+        return {};
+    }
+
+    VoidResult submit(std::size_t slot, std::span<std::uint8_t> buffer) override {
+        if (slot >= slots_.size() || slots_[slot].pending) {
+            return void_failure(ErrorKind::usb_io_failed,
+                                std::format("read slot {} invalid or busy", slot));
+        }
+        auto& s = slots_[slot];
+        ResetEvent(s.ov.hEvent);
+        const HANDLE event = s.ov.hEvent;
+        s.ov = {};
+        s.ov.hEvent = event;
+        if (!WinUsb_ReadPipe(usb_, endpoint_, buffer.data(), static_cast<ULONG>(buffer.size()),
+                             nullptr, &s.ov)) {
+            const DWORD error = GetLastError();
+            if (error != ERROR_IO_PENDING) {
+                return void_failure(ErrorKind::usb_io_failed,
+                                    std::format("ReadPipe(0x{:02x}) submit failed: {} ({})",
+                                                endpoint_, error, win32_error_text(error)));
+            }
+        }
+        s.pending = true;
+        queue_.push_back(slot);
+        return {};
+    }
+
+    Result<std::optional<PipeCompletion>> wait(std::chrono::milliseconds timeout) override {
+        if (queue_.empty()) {
+            return std::optional<PipeCompletion>{};
+        }
+        const std::size_t slot = queue_.front();
+        auto& s = slots_[slot];
+        const DWORD w = WaitForSingleObject(s.ov.hEvent, static_cast<DWORD>(timeout.count()));
+        if (w == WAIT_TIMEOUT) {
+            return std::optional<PipeCompletion>{};
+        }
+        if (w != WAIT_OBJECT_0) {
+            return failure<std::optional<PipeCompletion>>(
+                ErrorKind::usb_io_failed, std::format("WaitForSingleObject failed: {}", GetLastError()));
+        }
+        queue_.pop_front();
+        s.pending = false;
+        PipeCompletion c;
+        c.slot = slot;
+        ULONG bytes = 0;
+        if (WinUsb_GetOverlappedResult(usb_, &s.ov, &bytes, FALSE)) {
+            c.bytes = bytes;
+        } else {
+            const DWORD error = GetLastError();
+            if (error == ERROR_OPERATION_ABORTED) {
+                c.aborted = true;
+            } else {
+                c.failed = true;
+                c.error = std::format("ReadPipe(0x{:02x}): {} ({})", endpoint_, error,
+                                      win32_error_text(error));
+            }
+        }
+        return std::optional<PipeCompletion>{c};
+    }
+
+    // WinUsb_AbortPipe cancels every queued read on the pipe; each one
+    // still signals its event (ERROR_OPERATION_ABORTED) for wait().
+    void abort() override { WinUsb_AbortPipe(usb_, endpoint_); }
+
+private:
+    struct Slot {
+        OVERLAPPED ov{};
+        bool pending{false};
+    };
+    WINUSB_INTERFACE_HANDLE usb_;
+    std::uint8_t endpoint_;
+    std::vector<Slot> slots_;
+    std::deque<std::size_t> queue_; // submission order
+};
 
 class WinUsbTransport final : public IUsbTransport {
 public:
@@ -181,14 +297,17 @@ public:
                 std::format("ReadPipe(0x{:02x}) failed: {}", endpoint, error));
         }
         buffer.resize(read);
-        log::Logger::instance().hex(log::Level::trace, "RX", endpoint,
-                                    std::span<const std::uint8_t>(buffer));
+        // Length only: image bytes are never logged.
+        log::Logger::instance().log(log::Level::trace, "RX ep=0x{:02x} {} bytes", endpoint, read);
         return buffer;
     }
 
     Result<std::vector<std::uint8_t>>
     control_read(std::uint8_t request, std::uint16_t value, std::uint16_t index,
                  std::uint16_t length) override {
+        if (auto g = guard(eeprom::Direction::in, request, value, index); !g) {
+            return g.error();
+        }
         WINUSB_SETUP_PACKET setup{};
         setup.RequestType = 0xC0; // vendor IN, device, standard
         setup.Request = request;
@@ -215,6 +334,9 @@ public:
 
     Result<void> control_write(std::uint8_t request, std::uint16_t value,
                                std::uint16_t index) override {
+        if (auto g = guard(eeprom::Direction::out, request, value, index); !g) {
+            return g;
+        }
         WINUSB_SETUP_PACKET setup{};
         setup.RequestType = 0x40; // vendor OUT, no data stage
         setup.Request = request;
@@ -235,9 +357,58 @@ public:
         return {};
     }
 
+    // Image pipe: RAW_IO (each read goes straight to the host controller,
+    // transfer size a multiple of the 512-byte max packet) and no pipe
+    // timeout - a queued read waits for data until the stream aborts it;
+    // the stream's own read deadline detects silence.
+    Result<std::unique_ptr<IBulkInPipe>> open_bulk_in(std::uint8_t endpoint,
+                                                      std::size_t max_slots) override {
+        ULONG infinite = 0;
+        if (!WinUsb_SetPipePolicy(usb_, endpoint, PIPE_TRANSFER_TIMEOUT, sizeof(infinite),
+                                  &infinite)) {
+            const auto error = GetLastError();
+            return failure<std::unique_ptr<IBulkInPipe>>(
+                ErrorKind::usb_io_failed,
+                std::format("SetPipePolicy(0x{:02x}, PIPE_TRANSFER_TIMEOUT) failed: {}",
+                            endpoint, error));
+        }
+        UCHAR raw = TRUE;
+        if (!WinUsb_SetPipePolicy(usb_, endpoint, RAW_IO, sizeof(raw), &raw)) {
+            const auto error = GetLastError();
+            return failure<std::unique_ptr<IBulkInPipe>>(
+                ErrorKind::usb_io_failed,
+                std::format("SetPipePolicy(0x{:02x}, RAW_IO) failed: {}", endpoint, error));
+        }
+        auto pipe = std::make_unique<WinUsbBulkInPipe>(usb_, endpoint, max_slots);
+        if (auto ok = pipe->init(); !ok) {
+            return ok.error();
+        }
+        return std::unique_ptr<IBulkInPipe>(std::move(pipe));
+    }
+
     const DeviceInfo& device_info() const override { return info_; }
 
 private:
+    // Last line of defence under the EEPROM allow-list: every vendor OUT
+    // request must be an allow-listed EEPROM read-select
+    // (eeprom::is_allowed), so 0xA2 (EEPROM write) and the 0xA4
+    // write-select can never reach the device; an IN request may be any
+    // read except those two request codes.
+    static VoidResult guard(eeprom::Direction direction, std::uint8_t request,
+                            std::uint16_t value, std::uint16_t index) {
+        const bool ok = direction == eeprom::Direction::out
+                            ? eeprom::is_allowed({direction, request, value, index})
+                            : request != eeprom::kRequestWrite && request != eeprom::kRequestSelect;
+        if (!ok) {
+            return void_failure(
+                ErrorKind::usb_not_supported,
+                std::format("refused vendor request 0x{:02x}/0x{:04x}/0x{:04x}: EEPROM "
+                            "writes are never sent",
+                            request, value, index));
+        }
+        return {};
+    }
+
     WinUsbTransport(DeviceInfo info, HANDLE device, WINUSB_INTERFACE_HANDLE usb)
         : info_(std::move(info)), device_(device), usb_(usb) {}
 
@@ -252,7 +423,7 @@ private:
         // pipes always had.
         ULONG timeout_ms = kPipeTimeoutMs;
         const std::uint8_t pipes[] = {kCommandOutEndpoint, kCommandInEndpoint,
-                                      image::kImageEndpoint};
+                                      protocol::scan::kImageEndpoint};
         for (const std::uint8_t pipe : pipes) {
             if (!WinUsb_SetPipePolicy(usb_, pipe, PIPE_TRANSFER_TIMEOUT,
                                        sizeof(timeout_ms), &timeout_ms)) {

@@ -38,7 +38,7 @@ inline constexpr std::uint8_t kCommandInEndpoint = 0x81;
 
 // Per-transfer deadline for EVERY pipe of an open session
 // (WinUsbTransport::apply_timeouts): command OUT 0x01, command IN
-// 0x81, image IN 0x86 (image::kImageEndpoint). WinUSB's default
+// 0x81, image IN 0x86 (protocol::scan::kImageEndpoint). WinUSB's default
 // PIPE_TRANSFER_TIMEOUT is 0 = wait indefinitely: with no explicit
 // policy a device that stops feeding 0x86 blocks WinUsb_ReadPipe
 // forever, no usb_timeout surfaces, no idle tick is produced, and the
