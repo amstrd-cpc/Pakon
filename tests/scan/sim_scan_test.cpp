@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <format>
+#include <stdexcept>
 #include <thread>
 
 #include "pakon/eeprom/eeprom.hpp"
@@ -53,6 +54,10 @@ private:
 };
 
 // Optionally slows every exchange after `after` frames (a busy consumer).
+// When set, the channel throws once, on the first exchange after the
+// motor-go command (an exception in the middle of the film window).
+bool g_throw_after_go = false;
+
 class Channel final : public scan::ICommandChannel {
 public:
     Channel(ppb::Client& c, std::size_t after, std::chrono::milliseconds delay)
@@ -61,6 +66,12 @@ public:
         if (++count_ > after_ && delay_.count() > 0) {
             std::this_thread::sleep_for(delay_);
         }
+        if (go_seen_ && g_throw_after_go) {
+            g_throw_after_go = false;
+            throw std::runtime_error("injected exception");
+        }
+        const auto bytes = f.serialize();
+        go_seen_ = go_seen_ || (bytes && *bytes == std::vector<std::uint8_t>{0x04, 0x03, 0x44, 0x00, 0xA0});
         return inner_.exchange(f);
     }
 
@@ -69,6 +80,7 @@ private:
     std::size_t after_;
     std::chrono::milliseconds delay_;
     std::size_t count_{0};
+    bool go_seen_{false};
 };
 
 // 4x the real line rate. Instrumented builds (TSan slows the consumer
@@ -409,6 +421,33 @@ PAKON_TEST(a_fault_at_any_frame_sends_the_teardown_exactly_once) {
         }
     }
     std::printf("  fault sweep: %zu runs over %zu frames (stride %zu)\n", runs, total, stride);
+}
+
+PAKON_TEST(an_exception_mid_film_still_tears_down_once) {
+    auto scfg = fast_sim();
+    scfg.film = sim::FilmModel{200, 600};
+    g_throw_after_go = true;
+    auto o = run(scfg, fast_runner({scan::Base::b4, false}, scan::ScanKind::film));
+    EXPECT(!o.ok);
+    EXPECT(o.error.find("injected exception") != std::string::npos);
+    EXPECT(!g_throw_after_go); // it did fire
+    expect_teardown_exactly_once(o);
+    expect_safe_end(o);
+}
+
+PAKON_TEST(a_row_cap_that_cannot_fit_in_memory_fails_before_the_motor_moves) {
+    auto rcfg = fast_runner({scan::Base::b16, true}, scan::ScanKind::film);
+    rcfg.film_row_budget = static_cast<std::size_t>(-1) / 2;
+    auto o = run(fast_sim(), rcfg);
+    EXPECT(!o.ok);
+    EXPECT(o.error.find("too large") != std::string::npos);
+    // No motor go before the teardown (whose tail is rate 0 -> go -> idle).
+    for (std::size_t i = 0; i + 9 < o.frames.size(); ++i) {
+        const auto& f = o.frames[i];
+        EXPECT(!(f.size() == 5 && f[2] == 0x44 && f[4] == 0xA0));
+    }
+    expect_teardown_exactly_once(o);
+    expect_safe_end(o);
 }
 
 int main() { return pakon::test::run_all(); }

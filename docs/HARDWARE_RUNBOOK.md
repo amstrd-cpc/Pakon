@@ -131,12 +131,16 @@ Send back: console, `film1.*`, and what the motor/strip physically did.
 ## 8. Full scan
 
 ```
-.\pakon-cli.exe --log debug scan --live-scan --config base4 --film-rows 60000 --out-prefix strip1
+.\pakon-cli.exe --log debug scan --live-scan --config base4 --film-rows 15000 --out-prefix strip1
 ```
 
-The row cap is only a safety bound; film end normally ends the pass (a
-45 s no-film timeout ends it if no film is seen). Then the other modes:
-`base8`, `base16`, each `-ir`. Send back: console + all outputs.
+The row cap is a safety bound; film end normally ends the pass (a 45 s
+no-film timeout ends it if no film is seen). A 6-frame strip is roughly
+10 000 lines at Base 4, 14 000 at Base 8, 20 000 at Base 16, so use
+`--film-rows` 15000 / 20000 / 30000 for `base4` / `base8` / `base16` (and
+their `-ir` variants). The window is held in memory and reserved before the
+motor starts (Base 16 IR at 30 000 rows ≈ 480 MB); a cap the PC cannot
+hold fails before any motion. Send back: console + all outputs.
 
 ## 9. Capturing the OEM stack for comparison (optional, very useful)
 

@@ -1,6 +1,7 @@
 #include "pakon/scan/runner.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <format>
 #include <thread>
 
@@ -119,7 +120,16 @@ Result<ScanResult> ScanRunner::run(ICommandChannel& commands, stream::IImageStre
         stream.discard();
     });
 
-    auto r = run_phases(device, stream);
+    // An exception (e.g. bad_alloc) must not skip the teardown either.
+    VoidResult r;
+    try {
+        r = run_phases(device, stream);
+    } catch (const std::exception& e) {
+        r = void_failure(ErrorKind::scanner_unexpected_state,
+                         std::format("exception during the scan: {}", e.what()));
+    } catch (...) {
+        r = void_failure(ErrorKind::scanner_unexpected_state, "unknown exception during the scan");
+    }
     // The one teardown, on every path. Never cancellable.
     const auto t0 = Clock::now();
     result_.teardown = device.teardown();
@@ -272,6 +282,15 @@ VoidResult ScanRunner::run_phases(ScanDevice& device, stream::IImageStream& stre
     }
     const Geometry fg = film_geometry(mode, base.offset);
     result_.film_geometry = fg;
+    // The whole window is held in memory: reserve it now, before the
+    // motor moves, so a row cap the host cannot hold fails here (caught
+    // by run(), teardown follows) instead of mid-strip.
+    if (config_.film_row_budget > result_.film.samples.max_size() / fg.samples_per_line()) {
+        return void_failure(ErrorKind::image_no_completion_policy,
+                            std::format("film row cap {} is too large to hold in memory",
+                                        config_.film_row_budget));
+    }
+    result_.film.samples.reserve(config_.film_row_budget * fg.samples_per_line());
     if (auto r = device.fpga_settings(fg, integ); !r) {
         return r;
     }
