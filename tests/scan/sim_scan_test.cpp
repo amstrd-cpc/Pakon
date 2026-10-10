@@ -164,8 +164,10 @@ Outcome run(sim::SimConfig scfg, scan::RunnerConfig rcfg, stream::StreamConfig s
 // The teardown's nine frames, located by their registers (the control
 // word value depends on the mode): ctrl-idle, lamp off, FIFO pair, DX
 // stop, 0xA2, rate 0, go, 0xA2.
+constexpr std::size_t kTeardownFrames = 10;
+
 bool is_teardown_at(const std::vector<std::vector<std::uint8_t>>& f, std::size_t i) {
-    if (i + 9 > f.size()) {
+    if (i + kTeardownFrames > f.size()) {
         return false;
     }
     const auto eq = [&](std::size_t k, std::initializer_list<std::uint8_t> v) {
@@ -176,7 +178,8 @@ bool is_teardown_at(const std::vector<std::vector<std::uint8_t>>& f, std::size_t
            eq(2, {0x02, 0x04, 0x10, 0x01, 0x84, 0x02}) && eq(3, {0x04, 0x03, 0x40, 0x00, 0x8A}) &&
            eq(4, {0x04, 0x03, 0x40, 0x00, 0x92}) && eq(5, {0x04, 0x03, 0x44, 0x00, 0xA2}) &&
            eq(6, {0x02, 0x05, 0x44, 0x02, 0xA5, 0x00, 0x00}) &&
-           eq(7, {0x04, 0x03, 0x44, 0x00, 0xA0}) && eq(8, {0x04, 0x03, 0x44, 0x00, 0xA2});
+           eq(7, {0x04, 0x03, 0x44, 0x00, 0xA0}) && eq(8, {0x04, 0x03, 0x44, 0x00, 0xA2}) &&
+           eq(9, {0x02, 0x06, 0x44, 0x03, 0x82, 0x09, 0x17, 0x00});
 }
 
 void expect_teardown_exactly_once(const Outcome& o) {
@@ -189,9 +192,9 @@ void expect_teardown_exactly_once(const Outcome& o) {
         }
     }
     EXPECT_EQ(found, 1u);
-    EXPECT_EQ(at + 9, o.frames.size()); // nothing after it
+    EXPECT_EQ(at + kTeardownFrames, o.frames.size()); // nothing after it
     EXPECT(o.teardown.ran);
-    EXPECT_EQ(o.teardown.steps.size(), 9u);
+    EXPECT_EQ(o.teardown.steps.size(), kTeardownFrames);
 }
 
 void expect_safe_end(const Outcome& o) {
@@ -324,7 +327,7 @@ PAKON_TEST(first_light_keeps_dark_and_white_lines_and_never_moves_the_motor) {
         EXPECT(m > 300 - 40 && m < 300 + 40);
     }
     // No motor command before the teardown.
-    const std::size_t end = o.frames.size() - 9;
+    const std::size_t end = o.frames.size() - kTeardownFrames;
     for (std::size_t i = 0; i < end; ++i) {
         const auto& f = o.frames[i];
         const bool motor = f.size() >= 5 && f[2] == 0x44 &&
@@ -393,7 +396,7 @@ PAKON_TEST(a_fault_at_any_frame_sends_the_teardown_exactly_once) {
     auto clean = run(fast_sim(), fast_runner({scan::Base::b4, false}, scan::ScanKind::first_light));
     EXPECT(clean.ok);
     const std::size_t total = clean.frames.size();
-    const std::size_t teardown_at = total > 12 ? total - 12 : 0;
+    const std::size_t teardown_at = total > kTeardownFrames + 3 ? total - kTeardownFrames - 3 : 0;
     const bool full = std::getenv("PAKON_FULL_FAULT_SWEEP") != nullptr;
     const std::size_t stride = full ? 1 : 7;
     std::size_t runs = 0;
@@ -409,7 +412,7 @@ PAKON_TEST(a_fault_at_any_frame_sends_the_teardown_exactly_once) {
             // teardown reports the failed step (or a fault that landed
             // past the end of this run).
             if (o.ok) {
-                EXPECT(!o.teardown.all_ok() || at + 9 >= o.frames.size() || at >= o.frames.size());
+                EXPECT(!o.teardown.all_ok() || at + kTeardownFrames >= o.frames.size() || at >= o.frames.size());
             }
             expect_teardown_exactly_once(o);
             EXPECT(o.violations.empty());
@@ -442,7 +445,7 @@ PAKON_TEST(a_row_cap_that_cannot_fit_in_memory_fails_before_the_motor_moves) {
     EXPECT(!o.ok);
     EXPECT(o.error.find("too large") != std::string::npos);
     // No motor go before the teardown (whose tail is rate 0 -> go -> idle).
-    for (std::size_t i = 0; i + 9 < o.frames.size(); ++i) {
+    for (std::size_t i = 0; i + kTeardownFrames < o.frames.size(); ++i) {
         const auto& f = o.frames[i];
         EXPECT(!(f.size() == 5 && f[2] == 0x44 && f[4] == 0xA0));
     }

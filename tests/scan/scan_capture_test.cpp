@@ -70,10 +70,12 @@ PAKON_TEST(teardown_starts_with_the_oem_stop_in_capture_order) {
     const auto& report = device.teardown();
     EXPECT(report.ran);
     EXPECT(report.all_ok());
-    // base4.jsonl 32.385-32.460, then the bridge's rate=0 -> go -> idle.
+    // base4.jsonl 32.385-32.460, then the bridge's rate=0 -> go -> idle,
+    // then the panel back to idle (the OEM's own last write, sub9 0x0017).
     const char* expected[] = {"0206440382006200", "020440018000", "020410018402",
                               "040340008a",       "0403400092",   "04034400a2",
-                              "02054402a50000",   "04034400a0",   "04034400a2"};
+                              "02054402a50000",   "04034400a0",   "04034400a2",
+                              "0206440382091700"};
     EXPECT_EQ(rec.sent.size(), std::size(expected));
     for (std::size_t i = 0; i < rec.sent.size() && i < std::size(expected); ++i) {
         EXPECT_EQ(rec.sent[i], std::string(expected[i]));

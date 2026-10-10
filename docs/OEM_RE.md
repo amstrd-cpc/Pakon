@@ -503,7 +503,7 @@ against this runner's simulated base4 session (`sim_scan_test` with
 | B's film on-times saturate (0x1c0) | simulated calibration on-times × the film boost exceed the base; on a real unit they follow the measured whites |
 | OEM `DX start` (`PICL 0x91`) before warm-up; B after acquire | placement only; the DX reader is not used by this stack |
 | B rewrites `PICL 0x80 = 00` and `0x89 = 00` at the calibration start, and the idle control word once more in teardown | redundant idempotent writes |
-| B's tail `rate 0 → go → 0xA2`; OEM's tail panel LEDs `0x0217 → 0x0017` | the bridge stop sequence this project keeps on every path (§12); panel LEDs are cosmetic |
+| B's tail `rate 0 → go → 0xA2` | the bridge stop sequence this project keeps on every path (§12); both then end with panel LEDs idle `0x0017` (added after the first hardware film pass left the film-end state `0x02D4` blinking) |
 | EEPROM: B (pakon-cli) always reads both A copies | harmless extra reads; the OEM reads the backup only on a CRC failure (§11.2) |
 
 ## 12. Open questions

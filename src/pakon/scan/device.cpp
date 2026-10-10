@@ -278,6 +278,10 @@ std::vector<TeardownFrame> teardown_frames(const protocol::ControllerAddresses& 
         {"rate = 0 (0xA5)", ps::motor_rate(a.motor, 0)},
         {"go (0xA0)", ps::motor_go(a.motor)},
         {"idle (0xA2)", ps::motor_stop(a.motor)},
+        // Front panel back to idle, as the OEM's bAfterScan ends
+        // (base4.jsonl tail 0x0217 -> 0x0017); without it the last scan
+        // state (e.g. film end 0x02D4, blinking) stays on the panel.
+        {"panel LEDs idle", ps::fpga(a.motor, ps::Fpga::panel_leds, 0x0017)},
     };
 }
 
