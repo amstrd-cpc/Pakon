@@ -99,8 +99,9 @@ inline int run_all() {
 
 #define EXPECT_EQ(a, b)                                                           \
     do {                                                                          \
-        const auto& va = (a);                                                     \
-        const auto& vb = (b);                                                     \
+        /* by value: GCC 15 flags a reference bound to a call result */           \
+        const auto va = (a);                                                      \
+        const auto vb = (b);                                                      \
         if (!(va == vb)) {                                                        \
             ::pakon::test::report_failure(                                        \
                 __FILE__, __LINE__,                                               \

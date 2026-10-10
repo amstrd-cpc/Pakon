@@ -106,3 +106,23 @@ add_executable(raw_writer_test image/raw_writer_test.cpp)
 target_link_libraries(raw_writer_test PRIVATE pakon_core)
 target_include_directories(raw_writer_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME raw_writer COMMAND raw_writer_test)
+
+# --- Simulator-backed suites -------------------------------------------
+
+# The fake F-135+ (tests/support/sim_device.*): PPB replies, controller
+# state, EEPROM, and EP6 streaming on its own clock. Shared by every
+# simulator-backed suite and by tools/sim_server (the Wine shim backend).
+find_package(Threads REQUIRED)
+add_library(pakon_sim STATIC support/sim_device.cpp)
+target_link_libraries(pakon_sim PUBLIC pakon_core Threads::Threads)
+target_include_directories(pakon_sim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+function(pakon_sim_test name source)
+    add_executable(${name}_test ${source})
+    target_link_libraries(${name}_test PRIVATE pakon_sim)
+    add_test(NAME ${name} COMMAND ${name}_test)
+endfunction()
+
+pakon_sim_test(sim_device sim/sim_device_test.cpp)
+pakon_sim_test(image_stream stream/image_stream_test.cpp)
+pakon_sim_test(eeprom eeprom/eeprom_test.cpp)
