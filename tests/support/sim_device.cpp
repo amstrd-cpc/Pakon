@@ -71,7 +71,7 @@ std::vector<std::uint8_t> make_eeprom(const EepromSpec& spec) {
     }
     for (const std::size_t base : {std::size_t{0x000}, std::size_t{0x400}}) {
         std::fill(img.begin() + static_cast<std::ptrdiff_t>(base),
-                  img.begin() + static_cast<std::ptrdiff_t>(base + 398), 0x00);
+                  img.begin() + static_cast<std::ptrdiff_t>(base + 398), std::uint8_t{0x00});
         put32(img, base + 0x08, 400);
         put32(img, base + 0x0C, 1351);
         put32(img, base + 0x10, spec.serial);
@@ -94,7 +94,7 @@ std::vector<std::uint8_t> make_eeprom(const EepromSpec& spec) {
     }
     for (const std::size_t base : {std::size_t{0x800}, std::size_t{0xA00}}) {
         std::fill(img.begin() + static_cast<std::ptrdiff_t>(base),
-                  img.begin() + static_cast<std::ptrdiff_t>(base + 36), 0x00);
+                  img.begin() + static_cast<std::ptrdiff_t>(base + 36), std::uint8_t{0x00});
         for (std::size_t w = 0; w < 12; ++w) {
             put16(img, base + 0x08 + 2 * w, spec.adjust);
         }
