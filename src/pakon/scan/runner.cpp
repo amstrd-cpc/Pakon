@@ -216,6 +216,11 @@ VoidResult ScanRunner::run_phases(ScanDevice& device, stream::IImageStream& stre
         if (auto r = device.fpga_settings(g, integ); !r) {
             return r;
         }
+        // The OEM empties the FIFOs between the geometry and the acquire
+        // bit (CAP base4.jsonl 27.648-27.674).
+        if (auto r = device.reset_fifos(); !r) {
+            return r;
+        }
         if (auto r = device.acquire(true); !r) {
             return r;
         }

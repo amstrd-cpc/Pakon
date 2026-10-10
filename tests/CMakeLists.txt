@@ -101,3 +101,11 @@ set_tests_properties(sim_scan PROPERTIES TIMEOUT 900)
 # with base4.jsonl; per-config geometry/integration/DX words against all
 # six sessions.
 pakon_sim_test(scan_capture scan/scan_capture_test.cpp)
+
+# Session tools (tools/pcap_to_jsonl.py, tools/compare_sessions.py) on
+# synthetic USBPcap captures; skipped when no Python 3 interpreter exists.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND AND NOT CMAKE_CROSSCOMPILING)
+    add_test(NAME session_tools
+             COMMAND Python3::Interpreter -I ${CMAKE_SOURCE_DIR}/tools/tests/test_session_tools.py)
+endif()

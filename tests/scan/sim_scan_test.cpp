@@ -228,6 +228,32 @@ PAKON_TEST(f2_a_film_window_ends_while_the_device_still_streams) {
     expect_safe_end(o);
 }
 
+// With PAKON_SESSION_DIR set, every_configuration writes each scan's
+// command frames as <dir>/<mode>.jsonl (corpus schema; t = frame index
+// in ms, no ep0/ep6 events) for tools/compare_sessions.py against the
+// OEM captures.
+static void dump_session(const std::vector<std::vector<std::uint8_t>>& frames, scan::ScanMode mode) {
+    const char* dir = std::getenv("PAKON_SESSION_DIR");
+    if (!dir) {
+        return;
+    }
+    const std::string path = std::string(dir) + "/" + std::string(scan::mode_name(mode)) + ".jsonl";
+    std::FILE* f = std::fopen(path.c_str(), "w");
+    if (!f) {
+        return;
+    }
+    std::fprintf(f, "{\"d\":\"meta\",\"label\":\"sim-%s\",\"bridge\":\"sim_scan_test\"}\n",
+                 std::string(scan::mode_name(mode)).c_str());
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        std::string hex;
+        for (const auto b : frames[i]) {
+            hex += std::format("{:02x}", b);
+        }
+        std::fprintf(f, "{\"t\":%.3f,\"d\":\"cmd\",\"hex\":\"%s\"}\n", i / 1000.0, hex.c_str());
+    }
+    std::fclose(f);
+}
+
 PAKON_TEST(every_configuration_scans_a_strip_end_to_end) {
     const scan::ScanMode modes[] = {{scan::Base::b4, false},  {scan::Base::b4, true},
                                     {scan::Base::b8, false},  {scan::Base::b8, true},
@@ -237,6 +263,7 @@ PAKON_TEST(every_configuration_scans_a_strip_end_to_end) {
         auto scfg = fast_sim();
         scfg.film = sim::FilmModel{200, 600};
         auto o = run(scfg, fast_runner(mode, scan::ScanKind::film));
+        dump_session(o.frames, mode);
         EXPECT(o.ok);
         if (!o.ok) {
             std::fprintf(stderr, "  %s: %s\n", std::string(scan::mode_name(mode)).c_str(),
