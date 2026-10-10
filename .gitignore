@@ -33,3 +33,16 @@ Thumbs.db
 
 # Python
 __pycache__/
+
+# Hardware session data: stays on the scanner PC. Raw USB captures carry
+# image data and EEPROM payloads (docs/HARDWARE_RUNBOOK.md §9); the EEPROM
+# dump is the unit's factory calibration. The converted .jsonl files and
+# diff.txt are the shareable artifacts.
+*.pcap
+*.pcapng
+eeprom.bin
+*.pakraw
+*.scan.json
+*.scan-stats.txt
+*.console.txt
+/*.tiff
