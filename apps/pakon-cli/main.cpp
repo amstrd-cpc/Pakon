@@ -484,6 +484,17 @@ int run_scanner_command(std::string_view command) {
         std::printf("Bridge info (HOST reg 0x03): %02x %02x\n",
                     (*identity->bridge_info)[0], (*identity->bridge_info)[1]);
     }
+    // The OEM log's own version line ("Version USB 0x03,0x0F ... Lamp
+    // 0x05,0x0A ... Motor 0x05,0x06", psiref Logs) for a direct
+    // comparison: bridge = (hi, lo) of HOST 0x03, controllers = (b[2],
+    // b[1]) of the dev-info page (docs/OEM_RE.md §4.1).
+    if (identity->bridge_info && identity->light_module && identity->motor_module) {
+        const auto lamp = identity->light_module->firmware();
+        const auto motor = identity->motor_module->firmware();
+        std::printf("Version USB 0x%02X,0x%02X  Lamp 0x%02X,0x%02X  Motor 0x%02X,0x%02X\n",
+                    (*identity->bridge_info)[1], (*identity->bridge_info)[0], lamp.first,
+                    lamp.second, motor.first, motor.second);
+    }
 
     if (command == "identify") {
         (*scanner)->disconnect();

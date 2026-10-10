@@ -181,8 +181,51 @@ Result<Identity> Scanner::identify() {
     if (identity.model != Model::unknown) {
         identity.light_present = true;
 
+        // OEM order after the probe (docs/OEM_RE.md §4.1, CiFirmware::bUpdate
+        // TLB@0x1001c3e0 + bDrvGetDevInfo TLB@0x1000a370; bytes in every
+        // capture, e.g. base4.jsonl 5.795-5.814): bridge version, PICM
+        // 0x97 = 01, then per controller the dev-info page select
+        // 0x03 = 01 followed by the 12-byte 0x07 read. Without the select
+        // the 0x07 read answers a different page.
+        auto bridge = client_->exchange(ppb::make_read(protocol::kAddrHost, 2, 0x03),
+                                        FrameType::read);
+        if (!bridge) {
+            return bridge.error();
+        }
+        if (ppb::is_read_success(*bridge) && bridge->payload.size() == 2) {
+            identity.bridge_info = std::array<std::uint8_t, 2>{
+                bridge->payload[0], bridge->payload[1]};
+        } else {
+            log::Logger::instance().log(
+                log::Level::debug, "bridge info read answered status {}",
+                ppb::to_string(bridge->status));
+        }
+
+        const auto write_one = [&](std::uint8_t address, std::uint8_t reg,
+                                   std::uint8_t value) -> VoidResult {
+            auto reply = client_->exchange(
+                ppb::make_write(address, reg, std::array<std::uint8_t, 1>{value}),
+                FrameType::ack);
+            if (!reply) {
+                return reply.error();
+            }
+            if (!ppb::is_success(reply->status)) {
+                return void_failure(
+                    ErrorKind::ppb_bad_status,
+                    std::format("write 0x{:02x} reg 0x{:02x} = {:02x}: status {}", address,
+                                reg, value, ppb::to_string(reply->status)));
+            }
+            return {};
+        };
+        if (auto r = write_one(identity.addresses.motor, 0x97, 0x01); !r) {
+            return r.error();
+        }
+
         const auto read_module = [&](std::uint8_t address)
             -> Result<std::optional<ModuleInfo>> {
+            if (auto r = write_one(address, 0x03, 0x01); !r) {
+                return r.error();
+            }
             auto reply = client_->exchange(
                 ppb::make_read(address, 12, 0x07), FrameType::read);
             if (!reply) {
@@ -219,20 +262,6 @@ Result<Identity> Scanner::identify() {
             return motor.error();
         } else {
             identity.motor_module = *motor;
-        }
-
-        // Bridge info: READ HOST reg 0x03, 2 bytes — observed as
-        // 0f 03 in the capture corpus; semantics not documented.
-        auto bridge = client_->exchange(ppb::make_read(protocol::kAddrHost, 2, 0x03),
-                                        FrameType::read);
-        if (bridge && ppb::is_read_success(*bridge) &&
-            bridge->payload.size() == 2) {
-            identity.bridge_info = std::array<std::uint8_t, 2>{
-                bridge->payload[0], bridge->payload[1]};
-        } else if (bridge) {
-            log::Logger::instance().log(
-                log::Level::debug, "bridge info read answered status {}",
-                ppb::to_string(bridge->status));
         }
     }
 

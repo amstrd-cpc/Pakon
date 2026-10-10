@@ -11,10 +11,11 @@
 //   identify:   presence probes 04 03 <motor> 00 00 at 0x44 and 0x24
 //               — ppb-protocol.md § "Presence probes are model detection",
 //                 command-reference.md (CMD 0x00 = ResetMotor)
-//               module-info READ reg 0x07 (12 bytes) — command-reference.md
-//                 § "Initialisation" ("module-info read from each
-//                 controller"); register number from the capture corpus
-//               bridge-info READ HOST reg 0x03 (2 bytes) — capture corpus
+//               then the OEM's own order (docs/OEM_RE.md §4.1): bridge
+//               version READ HOST 0x03 (2 B), PICM 0x97 = 01, and per
+//               controller the dev-info page select 0x03 = 01 followed by
+//               READ 0x07 (12 B) — TLB@0x1001c3e0 / 0x1000a370, every
+//               capture (base4.jsonl 5.795-5.814)
 //   status:     polls 03 01 <addr>; READ 0x83 (CCD status), 0x84 (light
 //               status), 0x88 (temperature) — command-reference.md table
 //
@@ -26,6 +27,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "pakon/errors/error.hpp"
 #include "pakon/ppb/client.hpp"
@@ -69,8 +71,10 @@ std::string_view to_string(State state);
 // and the light bytes [0..3] are not stable across days (2026-10-09:
 // 82 02 d4 01 — matching the same-session temperature read's 82 02
 // shape) while [4..11] and the motor payload stay byte-identical.
-// So the semantics of every byte remain [UNKNOWN] beyond the capture-
-// evidenced ASCII window.
+// Resolved (OEM_RE.md §4.2): the lab unit was read WITHOUT the OEM's
+// 0x03 = 01 page select, so it answered a different page. On the
+// selected page b[2], b[1] are the firmware version the OEM logs as
+// "Lamp 0x05,0x0A Motor 0x05,0x06" (this unit's log reports the same).
 struct ModuleInfo {
     std::array<std::uint8_t, 12> raw{};
 
@@ -82,6 +86,12 @@ struct ModuleInfo {
 
     // Full payload as space-separated hex, e.g. "04 20 40 12 ... 92 00".
     std::string hex() const;
+
+    // Firmware version as the OEM prints it ("Lamp 0x05,0x0A"): (b[2],
+    // b[1]) of the dev-info page (TLB@0x1001c3e0, OEM_RE.md §4.1).
+    // Meaningful for a reply read after the 0x03 = 01 page select, which
+    // identify() now always sends.
+    std::pair<std::uint8_t, std::uint8_t> firmware() const { return {raw[2], raw[1]}; }
 };
 
 struct Identity {
@@ -91,7 +101,8 @@ struct Identity {
     bool motor_present{false};
     std::optional<ModuleInfo> light_module;
     std::optional<ModuleInfo> motor_module;
-    // HOST reg 0x03 read, observed 0f 03 in captures; semantics unknown.
+    // HOST reg 0x03 read: bridge firmware version, printed by the OEM as
+    // "USB 0x03,0x0F" (payload 0f 03, little-endian; OEM_RE.md §3).
     std::optional<std::array<std::uint8_t, 2>> bridge_info;
 };
 

@@ -29,6 +29,11 @@ void script_plus_unit_session(ReplayUsbTransport& t) {
     // probe answering 0x01 on a Plus is the documented inverted result):
     t.expect("0403440000", "07024400");
     t.expect("0403240000", "07022401");
+    // OEM pre-init writes (base4.jsonl 5.798/5.802/5.809): PICM 0x97 = 01
+    // and the dev-info page select 0x03 = 01 before each 0x07 read.
+    t.expect("020444019701", "07024400");
+    t.expect("020440010301", "07024000");
+    t.expect("020444010301", "07024400");
     // Module-info reads (capture lines 19-26):
     t.expect("0103400c07", "010e40080f0a05000031323334350000");
     t.expect("0103440c07", "010e4408100605000031323334350000");
@@ -92,6 +97,33 @@ PAKON_TEST(identify_detects_f135_plus) {
     if (identity->bridge_info) {
         EXPECT_EQ((*identity->bridge_info)[0], std::uint8_t{0x0f});
         EXPECT_EQ((*identity->bridge_info)[1], std::uint8_t{0x03});
+    }
+}
+
+PAKON_TEST(identify_sends_the_oem_pre_init_in_capture_order) {
+    auto transport = make_transport();
+    auto* raw = transport.get();
+    auto scanner = pakon::scanner::Scanner::connect(std::move(transport));
+    EXPECT(scanner.has_value());
+    if (!scanner) {
+        return;
+    }
+    auto identity = (*scanner)->identify();
+    EXPECT(identity.has_value());
+    // base4.jsonl 5.795-5.814: bridge version, 0x97, then select+read
+    // per controller (light first).
+    const char* order[] = {"0103100203", "020444019701", "020440010301",
+                           "0103400c07", "020444010301", "0103440c07"};
+    const auto& sent = raw->sent();
+    EXPECT(sent.size() >= 6);
+    if (sent.size() >= 6) {
+        for (std::size_t i = 0; i < 6; ++i) {
+            EXPECT_EQ(sent[sent.size() - 6 + i], ReplayUsbTransport::from_hex(order[i]));
+        }
+    }
+    if (identity && identity->light_module) {
+        EXPECT_EQ(identity->light_module->firmware().first, 0x05);
+        EXPECT_EQ(identity->light_module->firmware().second, 0x0A);
     }
 }
 
