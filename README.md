@@ -122,7 +122,7 @@ Layering rules (who may call whom, and what each layer may emit) are in
 
 ## Documentation — recommended reading order
 
-1. **[docs/STATUS.md](docs/STATUS.md)** — what works, how it is verified,
+1. **[docs/HANDOFF.md](docs/HANDOFF.md)** if you are continuing this work on another machine. **[docs/STATUS.md](docs/STATUS.md)** — what works, how it is verified,
    ranked risks. Start here. Then **[docs/OEM_RE.md](docs/OEM_RE.md)** (the
    device/protocol reference) and
    **[docs/HARDWARE_RUNBOOK.md](docs/HARDWARE_RUNBOOK.md)** (first scans).
