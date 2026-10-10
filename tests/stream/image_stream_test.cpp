@@ -4,6 +4,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -185,6 +188,115 @@ PAKON_TEST(transfer_failure_surfaces_through_read) {
     acquire(sim, false);
     stream->stop();
     EXPECT(stream->stats().transfer_errors >= 1);
+}
+
+// A pipe the test drives by hand: queued reads complete, in submit
+// order, only when released; each one is filled with its submit number.
+class ScriptedPipe final : public pakon::usb::IBulkInPipe {
+public:
+    pakon::VoidResult submit(std::size_t slot, std::span<std::uint8_t> buffer) override {
+        std::scoped_lock lock(mutex_);
+        queue_.push_back({slot, buffer, submitted_++});
+        cv_.notify_all();
+        return {};
+    }
+    pakon::Result<std::optional<pakon::usb::PipeCompletion>> wait(
+        std::chrono::milliseconds timeout) override {
+        std::unique_lock lock(mutex_);
+        if (!cv_.wait_for(lock, timeout, [&] {
+                return !queue_.empty() && (aborted_ || released_ > 0);
+            })) {
+            return std::optional<pakon::usb::PipeCompletion>{};
+        }
+        auto q = queue_.front();
+        queue_.pop_front();
+        pakon::usb::PipeCompletion c;
+        c.slot = q.slot;
+        if (aborted_) {
+            c.aborted = true;
+        } else {
+            --released_;
+            std::fill(q.buffer.begin(), q.buffer.end(), static_cast<std::uint8_t>(q.seq));
+            c.bytes = q.buffer.size();
+        }
+        return std::optional<pakon::usb::PipeCompletion>{c};
+    }
+    void abort() override {
+        std::scoped_lock lock(mutex_);
+        aborted_ = true;
+        cv_.notify_all();
+    }
+    void release(std::size_t n) {
+        std::scoped_lock lock(mutex_);
+        released_ += n;
+        cv_.notify_all();
+    }
+    std::size_t submitted() {
+        std::scoped_lock lock(mutex_);
+        return submitted_;
+    }
+
+private:
+    struct Queued {
+        std::size_t slot;
+        std::span<std::uint8_t> buffer;
+        std::size_t seq;
+    };
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    std::deque<Queued> queue_;
+    std::size_t submitted_{0};
+    std::size_t released_{0};
+    bool aborted_{false};
+};
+
+void wait_submitted(ScriptedPipe& pipe, std::size_t n) {
+    for (int i = 0; i < 2000 && pipe.submitted() < n; ++i) {
+        std::this_thread::sleep_for(1ms);
+    }
+    EXPECT_EQ(pipe.submitted(), n);
+}
+
+// Reads already queued when discard() is called carry lines from before
+// the settings change and are dropped; reads submitted after it are
+// delivered (film2 hardware run, 2026-10-10).
+PAKON_TEST(discard_also_drops_the_reads_already_queued) {
+    StreamConfig cfg;
+    cfg.queued_reads = 4;
+    cfg.transfer_bytes = 16;
+    cfg.ring_bytes = 1024;
+    auto owned = std::make_unique<ScriptedPipe>();
+    ScriptedPipe& pipe = *owned;
+    ImageStream stream(std::move(owned), cfg);
+    EXPECT(stream.start().has_value());
+    wait_submitted(pipe, 4); // reads 0..3
+
+    pipe.release(2);         // reads 0, 1 complete; 4, 5 are queued
+    std::vector<std::uint8_t> buf(64);
+    std::vector<std::uint8_t> got;
+    while (got.size() < 32) {
+        auto n = stream.read(buf, 1000ms);
+        EXPECT(n.has_value() && *n > 0);
+        if (!n || *n == 0) {
+            break;
+        }
+        got.insert(got.end(), buf.begin(), buf.begin() + static_cast<std::ptrdiff_t>(*n));
+    }
+    EXPECT_EQ(got.size(), 32u);
+    EXPECT_EQ(got.front(), 0u);
+    EXPECT_EQ(got.back(), 1u);
+    wait_submitted(pipe, 6);
+
+    stream.discard();        // reads 2..5 are stale
+    pipe.release(4);
+    wait_submitted(pipe, 10); // resubmitted as reads 6..9
+    pipe.release(1);
+    auto n = stream.read(buf, 1000ms);
+    EXPECT(n.has_value());
+    EXPECT(n.has_value() && *n == 16u);
+    EXPECT_EQ(buf[0], 6u);
+    EXPECT_EQ(stream.stats().bytes_discarded, 64u);
+    stream.stop();
 }
 
 int main() { return pakon::test::run_all(); }

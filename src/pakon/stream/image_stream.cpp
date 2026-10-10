@@ -53,6 +53,7 @@ VoidResult ImageStream::start() {
     {
         std::scoped_lock lock(mutex_);
         fault_.clear();
+        slot_generation_.assign(config_.queued_reads, generation_);
     }
     stop_requested_ = false;
     running_ = true;
@@ -90,8 +91,16 @@ void ImageStream::reader_loop() {
         }
     };
 
+    auto submit = [&](std::size_t slot) {
+        {
+            std::scoped_lock lock(mutex_);
+            slot_generation_[slot] = generation_;
+        }
+        return pipe_->submit(slot, slots_[slot]);
+    };
+
     for (std::size_t slot = 0; slot < slots_.size(); ++slot) {
-        if (auto s = pipe_->submit(slot, slots_[slot]); !s) {
+        if (auto s = submit(slot); !s) {
             std::scoped_lock lock(mutex_);
             fault(std::format("submit of read {} failed: {}", slot, s.error().message));
             abort_all();
@@ -150,7 +159,9 @@ void ImageStream::reader_loop() {
                 const std::size_t n = std::min(c.bytes, slots_[c.slot].size());
                 ++stats_.transfers;
                 stats_.bytes_in += n;
-                if (!ring_.push(std::span<const std::uint8_t>(slots_[c.slot]).first(n))) {
+                if (slot_generation_[c.slot] != generation_) {
+                    stats_.bytes_discarded += n; // queued before the last discard()
+                } else if (!ring_.push(std::span<const std::uint8_t>(slots_[c.slot]).first(n))) {
                     ++stats_.overflow_events;
                     stats_.overflow_bytes += n;
                     fault(std::format(
@@ -168,7 +179,7 @@ void ImageStream::reader_loop() {
             abort_all();
             continue;
         }
-        if (auto s = pipe_->submit(c.slot, slots_[c.slot]); !s) {
+        if (auto s = submit(c.slot); !s) {
             {
                 std::scoped_lock lock(mutex_);
                 fault(std::format("resubmit of read {} failed: {}", c.slot,
@@ -207,6 +218,7 @@ void ImageStream::discard() {
     std::scoped_lock lock(mutex_);
     stats_.bytes_discarded += ring_.size();
     ring_.clear();
+    ++generation_;
 }
 
 StreamStats ImageStream::stats() const {

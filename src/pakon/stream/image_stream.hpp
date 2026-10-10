@@ -82,7 +82,12 @@ public:
     // (ring overflow, transfer failure) — sticky until the next start().
     virtual Result<std::size_t> read(std::span<std::uint8_t> dst,
                                      std::chrono::milliseconds timeout) = 0;
-    // Drop everything buffered (stale lines after a settings change).
+    // Drop everything buffered AND every transfer already queued when
+    // discard() is called: lines from before a settings change. Clearing
+    // only the buffer is not enough; the queued transfers complete
+    // afterwards with up to queued_reads × transfer_bytes of old lines
+    // (film2, 2026-10-10: a dark reference read the previous round's
+    // level at a new A/D offset).
     virtual void discard() = 0;
     virtual StreamStats stats() const = 0;
     virtual bool running() const = 0;
@@ -131,6 +136,10 @@ private:
     std::vector<std::vector<std::uint8_t>> slots_;
 
     mutable std::mutex mutex_;
+    // discard() generation, and the generation each slot was submitted
+    // under: a completion from an older generation is dropped.
+    std::uint64_t generation_{0};
+    std::vector<std::uint64_t> slot_generation_;
     std::condition_variable data_ready_;
     ByteRing ring_;
     StreamStats stats_;
