@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "pakon/errors/error.hpp"
+#include "pakon/usb/bulk_pipe.hpp"
 
 namespace pakon::usb {
 
@@ -161,6 +162,15 @@ public:
     // Bulk read from an arbitrary IN endpoint (image stream).
     virtual Result<std::vector<std::uint8_t>>
     bulk_read(std::uint8_t endpoint, std::size_t max_length) = 0;
+
+    // Asynchronous bulk-IN pipe on `endpoint` with up to `max_slots`
+    // reads in flight (usb/bulk_pipe.hpp) — the image stream's transport.
+    // Backends without overlapped I/O report usb_not_supported.
+    virtual Result<std::unique_ptr<IBulkInPipe>>
+    open_bulk_in(std::uint8_t /*endpoint*/, std::size_t /*max_slots*/) {
+        return failure<std::unique_ptr<IBulkInPipe>>(
+            ErrorKind::usb_not_supported, "no asynchronous bulk-IN pipe on this backend");
+    }
 
     // Vendor control request. Used for EEPROM/personality reads
     // (bmRequestType 0x40 OUT / 0xC0 IN, bRequest 0xA4/0xA9).

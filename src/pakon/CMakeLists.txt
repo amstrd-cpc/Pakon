@@ -22,6 +22,7 @@ set(PAKON_CORE_SOURCES
     image/row_sync.cpp
     image/reader.cpp
     image/raw_writer.cpp
+    stream/image_stream.cpp
 )
 
 if(WIN32)
