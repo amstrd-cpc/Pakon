@@ -85,6 +85,14 @@ function(pakon_sim_test name source)
 endfunction()
 
 pakon_sim_test(sim_device sim/sim_device_test.cpp)
+
+# The simulator behind pkusb.dll's TCP protocol, for running the OEM stack
+# under Wine against it (tools/wine/run_oem.sh). POSIX sockets: not built
+# for Windows.
+if(NOT WIN32)
+    add_executable(pakon_sim_server support/sim_server.cpp)
+    target_link_libraries(pakon_sim_server PRIVATE pakon_sim)
+endif()
 pakon_sim_test(image_stream stream/image_stream_test.cpp)
 pakon_sim_test(eeprom eeprom/eeprom_test.cpp)
 
