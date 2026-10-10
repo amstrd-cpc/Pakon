@@ -126,3 +126,11 @@ endfunction()
 pakon_sim_test(sim_device sim/sim_device_test.cpp)
 pakon_sim_test(image_stream stream/image_stream_test.cpp)
 pakon_sim_test(eeprom eeprom/eeprom_test.cpp)
+
+# Simulated full scans. At this commit the suite targets the original
+# runner and demonstrates root causes F1 (stream not drained during the
+# command block: device FIFO overflow) and F2 (a quiescence-ended window
+# never ends while the device streams). It is EXPECTED to fail until the
+# runner is rebuilt on the concurrent stream.
+pakon_sim_test(sim_scan scan/sim_scan_test.cpp)
+set_tests_properties(sim_scan PROPERTIES WILL_FAIL TRUE)
