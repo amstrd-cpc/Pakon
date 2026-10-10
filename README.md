@@ -24,7 +24,7 @@ Three rules shape everything here:
 
 | Area | State |
 |---|---|
-| Build & tests | **14 CTest entries / 105 C++ + 9 Python cases**, zero warnings on GCC, clang ASan+UBSan and TSan, MinGW-w64 cross build (tests also pass under Wine) — 2026-10-10 |
+| Build & tests | **14 CTest entries / 107 C++ + 9 Python cases**, zero warnings on GCC, clang ASan+UBSan and TSan, MinGW-w64 cross build (tests also pass under Wine) — 2026-10-10 |
 | USB layer | Two-pass SetupAPI enumeration (finds even Code-28 units), WinUSB transport, one shared overlapped-open path — **cold and warm bindings both observed on hardware** |
 | Bootstrap probe | `pakon-cli probe` — exactly one read-only `0xA9` read — **hardware-validated**: cold ROM baseline `win32 121`, answers `C0-05-0F-35-F2-07-AA-04` once stage-1 runs |
 | Descriptor discovery | `pakon-cli descriptors` — raw device + configuration descriptors, full interface/endpoint topology, strings, WinUSB cross-check; standard `GET_DESCRIPTOR` only — **recorded on hardware 2026-10-08** (live device descriptor byte-identical to the Pakon7 image) in [docs/F135_TOPOLOGY.md](docs/F135_TOPOLOGY.md) |

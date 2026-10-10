@@ -20,7 +20,7 @@ how it is verified, and what is open.
 
 Builds: GCC Debug, clang ASan+UBSan, clang TSan (`PAKON_SIM_SPEED=0.5`),
 MinGW-w64 x86_64 cross build (`cmake/mingw-w64-x86_64.cmake`, all 13 test
-exes also pass under Wine) — zero warnings, 14 CTest entries (105 C++ cases,
+exes also pass under Wine) — zero warnings, 14 CTest entries (107 C++ cases,
 9 Python cases).
 
 ## Not verified on hardware yet
