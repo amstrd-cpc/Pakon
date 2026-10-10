@@ -97,8 +97,18 @@ event combinations rejected.
 
 ## Command sets (protocol/commands.hpp)
 
+> **Superseded labels.** The OEM's own names and the register semantics
+> recovered from TLB.dll are in [OEM_RE.md](OEM_RE.md) §3 and take
+> precedence. Several working labels here are wrong: PICL `0x81` = LED
+> currents `[B, IR, R, _, G]`, PICL `0x82` = LED on-times (not a colour
+> matrix), PICM `0x82` = CCD FPGA settings by sub-register (control word with
+> the acquire bit, pixel window, integration, panel LEDs — not motor speed),
+> PICM `0x84` = A/D gains/offsets, PICL `0x8A` + HOST `0x84=02` = FIFO reset,
+> PICL `0x91`/`0x92` = DX reader start/stop (not scan-line parameters or
+> end of acquisition), PICM `0xA5` = motor rate.
+
 Bytes are shared across controllers; **the frame address disambiguates them**
-(`0x82` = SetColorMatrix on PICL, SetMotorSpeed on PICM). Source:
+(`0x82` = LED on-times on PICL, CCD FPGA settings on PICM). Source:
 command-reference.md tables; every byte/payload size was re-verified against
 the captures:
 
@@ -110,8 +120,8 @@ the captures:
 - **PICM `0x24`/`0x44`**: `0x00` C0, `0x82` W3 (indexed: `[subreg][u16 LE]`),
   `0x84` W3, `0x97` W1, `0xA0` C0, `0xA1` C0, `0xA2` C0, `0xA5` W2.
 - **HOST `0x10`**: `0x84` W1, `0x85` C0, `0x8F` W1.
-- `ScanLineParams` values (`0x91` payload, six resolution/IR combinations)
-  `[CONFIRMED live]` via dx-barcode.md.
+- `0x91` payload values (six resolution/IR combinations): the DX start
+  word per mode (OEM_RE.md §7.1).
 
 Capture-verified registers **not in command-reference's tables**:
 PICL/PICM `0x07` R12 (module info — the init sequence's "module-info read"),

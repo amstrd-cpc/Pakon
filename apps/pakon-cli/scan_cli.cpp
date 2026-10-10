@@ -549,7 +549,7 @@ void print_scan_usage(std::FILE* out) {
                  "  --film-rows <N>         film pass; N = hard row cap (film end and a 45 s\n"
                  "                          no-film timeout end it earlier)\n"
                  "  --out-prefix <path>     writes <path>.{white|film}.pakraw, .tiff preview,\n"
-                 "                          <path>.scan-stats.txt\n"
+                 "                          <path>.scan-stats.txt, <path>.scan.json\n"
                  "eeprom [--out <file>] - read-only EEPROM dump + parsed per-unit values\n"
                  "Ctrl+C during a live run stops at the next bounded point; the teardown\n"
                  "(lamp off, acquire off, motor stop, rate=0 -> go -> idle) always runs.\n"

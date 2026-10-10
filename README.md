@@ -24,14 +24,15 @@ Three rules shape everything here:
 
 | Area | State |
 |---|---|
-| Build & tests | **4 CTest suites / 45 cases**, green on Linux/GCC (2026-10-07); MSVC Release target with `/W4 /permissive-`, same suite |
+| Build & tests | **14 CTest entries / 105 C++ + 9 Python cases**, zero warnings on GCC, clang ASan+UBSan and TSan, MinGW-w64 cross build (tests also pass under Wine) — 2026-10-10 |
 | USB layer | Two-pass SetupAPI enumeration (finds even Code-28 units), WinUSB transport, one shared overlapped-open path — **cold and warm bindings both observed on hardware** |
 | Bootstrap probe | `pakon-cli probe` — exactly one read-only `0xA9` read — **hardware-validated**: cold ROM baseline `win32 121`, answers `C0-05-0F-35-F2-07-AA-04` once stage-1 runs |
 | Descriptor discovery | `pakon-cli descriptors` — raw device + configuration descriptors, full interface/endpoint topology, strings, WinUSB cross-check; standard `GET_DESCRIPTOR` only — **recorded on hardware 2026-10-08** (live device descriptor byte-identical to the Pakon7 image) in [docs/F135_TOPOLOGY.md](docs/F135_TOPOLOGY.md) |
 | Cold→warm boot chain | **Validated on hardware 2026-10-07**: stage-1 upload → `0xA4` preamble → gated `0xA9` → Pakon7 download (709 × `0xA3` + 19 × `0xA0`) → final run → re-enumeration as `0F05:F135` — full evidence record in [docs/BOOT_CHAIN.md](docs/BOOT_CHAIN.md) |
 | C++ loader | **Designed, not yet written** — [docs/LOADER_DESIGN.md](docs/LOADER_DESIGN.md); the frozen PowerShell procedure ([tools/pakon_boot_reference.ps1](tools/pakon_boot_reference.ps1)) remains the trusted reference until each ported step is re-validated |
-| PPB + scanner session | Implemented and replay-verified against captures (198 425 frames; scripted transport fails on any off-script request); **first on-hardware PPB exchange 2026-10-08**: connect handshake + presence probes OK, module-info reply well-formed but its documented `0x88` READ-flags byte hit a handling gap in `is_success` ([docs/STATUS.md](docs/STATUS.md)) |
-| Phases 5–10 (init/scan/teardown, film transport, imaging, decode, calibration read, output) | Not implemented yet |
+| PPB + scanner session | `identify`/`status` on hardware 2026-10-08/09; identify now sends the OEM pre-init (`0x97`, `0x03` page select) |
+| Scan path | EEPROM reader (read-only), concurrent EP6 stream, OEM-order runner with Corrections, film window, teardown on every path; `pakon-cli scan` writes `.pakraw` + TIFF preview + stats + `.scan.json` — **verified against the simulator, not yet on hardware**: follow [docs/HARDWARE_RUNBOOK.md](docs/HARDWARE_RUNBOOK.md) |
+| Image pipeline (flat-field, Digital ICE, colour) | Not started; seams recorded in [docs/OEM_RE.md](docs/OEM_RE.md) §13 |
 | Driver package | [driver/PakonWinUSB.inf](driver/PakonWinUSB.inf) — in-box `winusb.sys`, both device identities, interface GUID `{0e9e6f29-…}`; [driver/README.md](driver/README.md) |
 
 Latest full status, including open questions and what is still
@@ -68,6 +69,9 @@ pakon-cli [--log trace] <command>
   probe      read-only bootstrap probe: one documented 0xA9 control read
   identify   open a PPB session and detect the scanner model
   status     identify + read-only status polls and register reads
+  eeprom     read-only EEPROM dump + this unit's per-mode values
+  scan       --dry-run | --live-scan (see `pakon-cli --help` and
+             docs/HARDWARE_RUNBOOK.md)
 ```
 
 Binaries: `build/apps/pakon-cli/pakon-cli` (single-config) or
@@ -90,14 +94,22 @@ prints full TX/RX packet hex dumps.
 ## Repository map
 
 ```
-apps/pakon-cli/       CLI: list / attrib / probe / descriptors / identify / status
+apps/pakon-cli/       CLI: list / attrib / probe / descriptors / identify / status / eeprom / scan
 src/pakon/
   usb/                IUsbTransport, SetupAPI enumeration, WinUSB
                       backend, identity rules, driver attribution
   bootstrap/          read-only probe (stage-1 personality read)
   ppb/                frame serialize/parse + session client
   scanner/            session state machine + model detection
-  protocol/           header-only constants (addresses, commands)
+  protocol/           header-only constants and frame builders (scan registers)
+  eeprom/             read-only EEPROM reader with compile-time allow-list
+  stream/             concurrent EP6 image stream (queued reads, locked ring)
+  scan/               modes, device wrapper, line sync, Corrections, runner,
+                      teardown, scan.json sidecar
+  image/              PAKRAW writer, TIFF preview
+tests/support/        simulated F-135+ (sim_device), pkusb TCP server
+tools/                pcap_to_jsonl, compare_sessions, wine/ (OEM stack
+                      under Wine against the simulator)
   errors/ logging/    Result<T> error types; leveled logger + hex dumps
 tests/                4 CTest suites, 45 cases — no hardware required
 driver/               PakonWinUSB.inf + signing/install notes
@@ -110,8 +122,10 @@ Layering rules (who may call whom, and what each layer may emit) are in
 
 ## Documentation — recommended reading order
 
-1. **[docs/STATUS.md](docs/STATUS.md)** — what is done, in progress,
-   blocked and unknown. Start here.
+1. **[docs/STATUS.md](docs/STATUS.md)** — what works, how it is verified,
+   ranked risks. Start here. Then **[docs/OEM_RE.md](docs/OEM_RE.md)** (the
+   device/protocol reference) and
+   **[docs/HARDWARE_RUNBOOK.md](docs/HARDWARE_RUNBOOK.md)** (first scans).
 2. **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — the layers and
    the rules between them.
 3. **[docs/BOOT_CHAIN.md](docs/BOOT_CHAIN.md)** — the hardware-validated

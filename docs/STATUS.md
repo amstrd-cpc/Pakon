@@ -1,301 +1,61 @@
 # Status
 
-Last updated: 2026-10-08. Scope: Phase 1–4 first deliverable (structure, USB
-detection, PPB infrastructure, safe identify/status comms, tests, CLI, docs)
-plus the bootstrap evidence survey, the read-only probe, the
-**validated cold→warm boot chain** ([BOOT_CHAIN.md](BOOT_CHAIN.md)) with its
-loader-port design ([LOADER_DESIGN.md](LOADER_DESIGN.md)), and the
-read-only descriptor/topology diagnostic
-([F135_TOPOLOGY.md](F135_TOPOLOGY.md)).
+Last updated: 2026-10-10. Device and protocol facts live in
+[OEM_RE.md](OEM_RE.md) (single reference); this page only says what works,
+how it is verified, and what is open.
 
-Legend for evidence: **[COMPLETED]** verified by build/test evidence in this
-repository · **[HARDWARE-VALIDATED]** executed and recorded on the lab unit
-(2026-10-07, [BOOT_CHAIN.md](BOOT_CHAIN.md)) · **[PHYSICAL TEST REQUIRED]**
-not yet run against real hardware.
+## Works, verified in this repository
 
----
+| Area | Verification |
+|---|---|
+| Cold→warm boot chain (FX2 RAM boot only) | hardware 2026-10-07, [BOOT_CHAIN.md](BOOT_CHAIN.md) |
+| `list`, `descriptors`, `probe`, `identify`, `status` | hardware 2026-10-08/09 |
+| `identify` OEM pre-init (`0x97=01`, `0x03=01` before each `0x07`) | replay test; hardware pending |
+| Read-only EEPROM reader, compile-time allow-list, CRC, primary/backup, marked 16402 fallback (`pakon-cli eeprom`) | unit + simulator tests; hardware pending |
+| Concurrent EP6 stream: 12 queued 20 KiB reads into a 32 MiB ring, overflow = error | unit + simulator tests; WinUSB overlapped pipe (RAW_IO) compiled for Windows, hardware pending |
+| Scan runner on the OEM state machine: init block (byte-identical to capture), warm-up via service events, Corrections closed loop, host-ended windows, film-end detector + row cap, teardown exactly once on every path | simulator: all six modes, first light, late film, no film, slow consumer, corrupt EEPROM, fault at every frame |
+| `pakon-cli scan --dry-run/--live-scan`: `.pakraw` + TIFF preview + `.scan-stats.txt` + `.scan.json` sidecar | CLI gating tests (no device opened on usage/dry run) |
+| Session tools `pcap_to_jsonl.py`, `compare_sessions.py` | synthetic USBPcap tests; stack-vs-OEM diff explained in OEM_RE §11.3 |
+| OEM stack under Wine against the simulator | runs through connect/probe/EEPROM/identify; stops at Kodak CMS init (OEM_RE §11.2) |
 
-## COMPLETED
+Builds: GCC Debug, clang ASan+UBSan, clang TSan (`PAKON_SIM_SPEED=0.5`),
+MinGW-w64 x86_64 cross build (`cmake/mingw-w64-x86_64.cmake`, all 13 test
+exes also pass under Wine) — zero warnings, 14 CTest entries (105 C++ cases,
+9 Python cases).
 
-- **Cold→warm boot chain validated on hardware (2026-10-07)** —
-  [BOOT_CHAIN.md](BOOT_CHAIN.md): the OEM-derived sequence ran end-to-end
-  on the lab unit — stage-1 upload (360 × `0xA0`, 4476 B, extracted from
-  MD5-pinned `F235Ldr.sys`), `0xA4` preamble, gated `0xA9` answered
-  `C0-05-0F-35-F2-07-AA-04` (→ `F235_AA07` → `Pakon7.hex`), Pakon7 download
-  (709 × `0xA3` + 19 × `0xA0`, both shape-gated), final run → device
-  re-enumerated as `USB\VID_0F05&PID_F135\010-203-04`, `status=OK`,
-  `service=WINUSB`. Every write volatile (unplug = cold); probe unchanged.
-  Frozen procedure: `tools/pakon_boot_reference.ps1`. Remaining UNKNOWNs
-  listed in BOOT_CHAIN.md § 8.
-- **Read-only F135 descriptor/topology diagnostic (implementation
-  complete, hardware run pending)** — `pakon-cli descriptors` +
-  `src/pakon/usb/descriptors.*`: locates the booted `0F05:F135`, reads
-  the raw device + configuration descriptor bytes and referenced strings
-  via **standard `GET_DESCRIPTOR` only**, walks every interface /
-  alternate setting / endpoint (direction, transfer type, max packet,
-  interval, class/subclass/protocol), cross-checks against an
-  independent WinUSB `QueryInterfaceSettings`/`QueryPipe` walk, and
-  reports the WinUSB interface path, link speed and current
-  configuration. No vendor request (`0xA0`/`0xA3`/`0xA4`/`0xA9`
-  untouched), no firmware upload, no reset, no reconfiguration, no bulk
-  traffic. Observation tables in
-  [F135_TOPOLOGY.md](F135_TOPOLOGY.md) **filled from the 2026-10-08
-  lab run** (raw descriptors, two agreeing topology views, strings,
-  speed; live device descriptor byte-identical to the Pakon7 image).
-- **Reference analysis** — `docs/PAKON_REFERENCE.md`: what pakon-reference
-  provides, what translates directly, gaps/limitations, file-by-file
-  citations. pakon-reference is treated as primary spec throughout.
-- **Build system** — CMake ≥3.20, C++20, MSVC `/W4 /permissive-`, GCC/Clang
-  `-Wall -Wextra`; static `pakon_core` library + `pakon-cli` + CTest suites.
-- **Error handling** — `ErrorKind`/`Error`/`Result<T>` with `std::expected`
-  when available and a minimal identical fallback (exercised: this toolchain
-  compiles the fallback path).
-- **Logging** — leveled logger with trace-level TX/RX hex dumps
-  (`endpoint=… length=…` + hex rows); `pakon-cli --log trace`.
-- **USB abstraction** — `IUsbTransport` (command exchange / bulk read /
-  vendor control), `DeviceInfo`, enumeration API.
-  - Windows backend: two-pass SetupAPI discovery — PnP device tree
-    (`DIGCF_ALLCLASSES`, finds devices with **no function driver**, i.e.
-    Code 28 cold units) merged with `GUID_DEVINTERFACE_USB_DEVICE`
-    (supplies `device_path` where a driver registered one); driver-independent,
-    read-only. Hardware-ID recognition lives in platform-independent
-    `usb/identity.hpp`. WinUSB transport with a 2 s deadline on every
-    pipe (0x01/0x81/0x86 — WinUSB's default is 0 = wait forever) and
-    packet logging; `open_first` reports "discovered but not openable"
-    honestly instead of "not detected".
-  - Non-Windows stub so all protocol tests build and run anywhere.
-  - **Evidence:** both Windows sources compile clean for
-    `x86_64-windows-gnu`; full `pakon-cli.exe` links; CLI smoke-tested
-    (`--help`, `list`, bad-flag handling, error paths); test binaries run
-    as Windows executables. Native MSVC Release (2026-10-06): zero
-    `/W4 /permissive-` warnings, CTest 3/3, `pakon-cli list` run on the
-    lab machine (enumeration over the full PnP tree; the scanner was
-    detached at the time — no hardware result yet, see
-    PHYSICAL TEST REQUIRED).
-- **PPB layer** — frame serialize/parse with the `2 + count` invariant,
-  reply parsing with mirror-type + address-echo validation, status decoding,
-  five builders reproducing documented/captured request forms byte-for-byte,
-  destination safety allow-list.
-- **Scanner session** — connect (best-effort handshake), identify (presence
-  probes → model, module info `0x07`, bridge info HOST `0x03`), status
-  (HOST/light/motor polls + `0x83`/`0x84`/`0x88` reads), explicit
-  `State`/`Model` enums with logged transitions.
-- **pakon-cli** — `list` (enumeration only), `probe` (cold-device read-only
-  bootstrap probe: one documented vendor control read), `attrib`
-  (read-only PnP/driver attribution), `descriptors` (read-only USB
-  descriptor/topology scan), `identify`, `status`, `--log LEVEL`.
-- **Bootstrap evidence survey + read-only probe** — `docs/BOOTSTRAP.md`
-  records how far repo evidence reaches for the cold→warm firmware path:
-  the FX2 sequence is documented **by name only** and the firmware bytes
-  are excluded by scope rules, so no upload path and no packet format is
-  implemented (seven enumerated evidence gaps). Built instead:
-  `src/pakon/bootstrap/probe.*` (stage-1 personality read `0xA9`/`wValue
-  0`/`wIndex 0`/8 bytes, evidence-pinned) + `pakon-cli probe`, which opens
-  a cold device for that single read and nothing else (no bulk, no
-  control writes, no PPB/type-byte-0 exposure).
-- **Tests** — 45 cases: **45/45 passing on Linux/GCC (CTest 4/4,
-  2026-10-07)**; the MSVC Release re-run of the same 4 suites / 45 cases
-  was **reported green (operator, 2026-10-08)** together with the
-  `attrib` run — re-run after each landing change
-  (command: `docs/BOOTSTRAP.md` § 6).
-  All vectors verbatim from pakon-reference quotes and
-  the `alibosworth/pakon-captures` corpus (F-135+ serial 16402); replay
-  transport fails on any request not in the scripted captures. The
-  `usb_identity` suite covers hardware-ID recognition (cold F235, warm
-  F135, unrelated rejection, `&MI_` exclusion), serial-vs-PnP-location
-  parsing, discovered-but-not-openable representation, pins the
-  WinUSB INF's DeviceInterfaceGUID to the C++ constant, and pins the
-  shared WinUSB open parameters (`usb/win_usb_open.hpp`: overlapped flag
-  + both Windows open sites using the header — regression for the
-  2026-10-07 `ERROR_INVALID_HANDLE` discrepancy). The
-  `bootstrap_probe` suite pins the probe request layout (and forbids
-  `0xA2`/`0xA4`) and proves against a recording fake transport that a
-  probe performs exactly one control read and no writes/bulk traffic.
-- **WinUSB driver package** — `driver/PakonWinUSB.inf` (in-box
-  `winusb.sys` via `winusb.inf`; targets `USB\VID_0F05&PID_F235` and
-  `USB\VID_0F05&PID_F135&REV_0002`; project DeviceInterfaceGUID
-  `{0e9e6f29-e70a-4582-8d02-bde3ad701252}`; no binaries, no firmware) +
-  `driver/README.md` (catalog signing via WDK `inf2cat`, install/removal)
-  + `docs/WINUSB_TEST.md` (exact manual procedure). **Physical bindings
-  observed 2026-10-07** (cold probe opened through this package's GUID;
-  post-boot F135 enumerated with `service=WINUSB` — attribution query
-  pending, `BOOT_CHAIN.md` § 6); the WINUSB_TEST.md evidence table itself
-  is still pending.
-- **Documentation** — `PAKON_REFERENCE.md`, `ARCHITECTURE.md`, `USB.md`,
-  `PPB.md`, `SCANNER.md`, `STATUS.md`, `WINUSB_TEST.md`; headers carry
-  per-claim citations.
-- **Capture-based verification of the reference** — all 198,425 frames in
-  six capture sessions satisfy `length == 2 + count`; command table
-  cross-checked (see `PPB.md` § Discrepancies: SetLightConfig `0x8F` payload
-  is 4 bytes not 2; HOST poll replies are 5 bytes; READ request layout fully
-  recovered).
+## Not verified on hardware yet
 
-## IN PROGRESS
+Everything from the EEPROM read onwards. The first live steps are in
+[HARDWARE_RUNBOOK.md](HARDWARE_RUNBOOK.md), in order; each one has its
+expected output and the failure signatures to look for.
 
-- Nothing actively in progress; Phase 1–4 code complete pending validation
-  below.
+## Riskiest assumptions (ranked)
 
-## NOT IMPLEMENTED (by design for this phase)
+1. **Teardown tail `rate=0 → go → 0xA2`** (kept from the bridge per the
+   safety rules). The OEM never writes a rate below 1000; if the PIC
+   rejects it the teardown reports a failed step (exit 1), the lamp and
+   acquire are already off by then.
+2. **Film on-time boost R1.39 G2.51 B5.18** comes from one capture's ratios,
+   not from TLB code. Wrong values mean a mis-exposed film pass, not harm.
+3. **Film start/end detector** is this stack's own (TLB's is unknown); the
+   row cap bounds it.
+4. **LED clock 0.24 per integration unit** (on-time base) is fitted to the
+   captures; the register that supplies it is unknown.
+5. **DX words and lamp temperature/TEC values** are replayed from the
+   capture, not derived.
+6. **Simulator optics** (dark/white levels, LED response) are a model; the
+   Corrections servo is tested against it, not against this unit.
+7. **This unit's history**: its OEM logs show `EC_FilmInGuides` ×392 and
+   `EC_HardwareFault 0x40000100/0x80000100` ×405 (lamp warning path).
+   First light will show whether the lamp side is healthy.
 
-- Firmware loading **in the repository** — the evidence gaps below are now
-  closed (OEM-artifact reverse engineering + hardware run,
-  [BOOT_CHAIN.md](BOOT_CHAIN.md)) and the sequence is validated as an
-  approved procedure (`tools/pakon_boot_reference.ps1`), but no C++
-  loader exists yet; component design and rollout:
-  [LOADER_DESIGN.md](LOADER_DESIGN.md). Firmware bytes remain excluded
-  from the repo by scope rule (fetched + MD5-gated at run time).
-- Initialization / scan / teardown sequences (Phase 5), film transport
-  (Phase 6), image acquisition (7), decoding (8), calibration EEPROM read
-  (9), output (10).
-- DX barcode substitution, TEC control (`0xD0/0xD1`), any EEPROM write,
-  colour pipeline, GUI.
-- libusb backend (Linux enumeration currently stubbed).
+## Open
 
-## BLOCKED
-
-- ~~I/O on a machine where the legacy Pakon driver owns the device~~ —
-  **resolved on the lab machine (2026-10-07):** the cold unit opens over
-  WinUSB through `driver/PakonWinUSB.inf` (probe + full boot ran, see
-  [BOOT_CHAIN.md](BOOT_CHAIN.md)); the `Pakon135IoctlTransport` option
-  remains only as a fallback for units still owned by the legacy stack.
-  Enumeration (`list`) works regardless — including devices with no
-  function driver at all (Code 28).
-
-## PHYSICAL TEST REQUIRED
-
-Superseded 2026-10-07 for the bootstrap/boot items: the probe and the
-full cold→warm boot ran on the lab unit and their outputs are recorded in
-[BOOT_CHAIN.md](BOOT_CHAIN.md). Still untested:
-
-1. `pakon-cli list` against an attached unit (cold + warm identities,
-   serial parse, endpoint detail) — the hardware runs used the approved
-   PowerShell procedure, not the CLI enumerator.
-2. **The WinUSB binding test's own evidence table** (`docs/WINUSB_TEST.md`)
-   — the *bindings themselves* are now observed: cold `0f05:f235` opened
-   over WinUSB with interface GUID `{0e9e6f29…}` from the first probe
-   session, and the post-boot `0f05:f135&REV_0002` enumerated with
-   `service=WINUSB` (attribution query run reported green 2026-10-08;
-   BOOT_CHAIN.md § 6 rows await transcription from its output). The
-   `identify`/`status`-refuse-cold checks and the SET_CONFIGURATION-at-bind
-   risk adjudication still need their run.
-3. ~~The full connect handshake on a real unit~~ — **recorded
-   2026-10-08 (first open of the booted F135 by `identify`):**
-   `04 03 10 00 85` → `07 02 10 00`, `02 04 10 01 8f 00` →
-   `07 02 10 00`, `state connecting -> ready`. Later-open reply
-   behavior not separately recorded.
-4. ~~Presence probes `0x44`/`0x24` on a real F-135+~~ — **recorded
-   2026-10-08:** `0x44` → status `00` (present), `0x24` → status `01`
-   (absent) = exactly the F-135+ answer pattern documented in
-   `scanner.cpp`. Full model determination completed later the same day
-   (item 5); an F-135 (inverted pattern) still untested.
-5. Module-info / bridge-info / status register reads (`0x83`, `0x84`,
-   `0x88`) — replies are capture-verified but were captured from another
-   stack; our frames must be confirmed to elicit them.
-   **Module-info and bridge-info reads on hardware (2026-10-08):**
-   recorded after `254e8a1` — light `01 03 40 0c 07` → `01 0e 40 88` +
-   12 B payload, motor `01 03 44 0c 07` → `01 0e 44 08` + 12 B, bridge
-   `01 03 10 02 03` → `01 04 10 88 0f 03` (bridge bytes `0f 03` match the
-   corpus; both `0x88` and `0x08` accepted by `is_read_success`),
-   completing `identify` as `Model: F-135+`. **The lab unit's
-   module-info payloads differ entirely from the capture corpus**
-   (see UNKNOWN below).
-   **`status` run recorded 2026-10-09:** all 13 exchanges answered
-   (identify sequence + `03 01 10` → `03 04 10 88 aa aa`, `03 01 40` →
-   `03 02 40 88`, `03 01 44` → `03 02 44 08`, `01 03 40 01 83` →
-   `01 03 40 88 12`, `01 03 40 02 84` → `01 04 40 88 80 02`,
-   `01 03 40 04 88` → `01 06 40 88 82 02 d2 01`); values: host poll
-   `0x88`, light poll `0x88`, motor poll `0x08`, CCD `0x12`, light
-   status `80 02` (byte-identical to the corpus unit), temperature
-   payload `82 02 d2 01`. Poll event-bit statuses (`0x88`) exposed the
-   warn-gate gap → `is_poll_success()` added. Device responsive
-   throughout (identify re-run byte-identical at session start).
-6. Any claim that the driver-stack coexists with the running legacy
-   software — assumed only, untested.
-7. ~~`pakon-cli probe` against the cold unit~~ — **recorded 2026-10-07:**
-   cold ROM baseline `0xA9` → win32 `121` (no answer); after the stage-1
-   upload the same read answered `C0-05-0F-35-F2-07-AA-04`, and the full
-   boot transcript follows (`BOOT_CHAIN.md` § 3, § 5). A C++-path probe
-   run against hardware (via the MSVC build) is still worth repeating.
-8. ~~`pakon-cli descriptors` against the booted F135~~ — **recorded
-   2026-10-08:** full output in
-   [F135_TOPOLOGY.md](F135_TOPOLOGY.md) (raw device + configuration
-   descriptors, both topology views agreeing, strings incl. serial,
-   link speed high-or-above; live device descriptor **byte-identical**
-   to the Pakon7 image @ `0x1000`).
-
-## UNKNOWN / NEEDS INVESTIGATION
-
-- **READ event-flag handling gap in `is_success`** (found on hardware
-  2026-10-08): the device's well-formed module-info reply carried READ
-  flags `0x88 = 0x08 | 0x80` (event pending) — documented in
-  `ppb/packet.hpp` / `docs/PPB.md` / `docs/PAKON_REFERENCE.md`, capture
-  ratio 2657:1, pinned by `parse_read_reply_event_flag` — but
-  `is_success` accepts only `0x00`/`0x08`, so `identify` stopped with
-  `ppb_bad_status` and the 12-byte payload went uninterpreted. Fixing
-  the check (with test adjudication) awaits explicit go-ahead;
-  analysis: [F135_TOPOLOGY.md](F135_TOPOLOGY.md) § 5.
-  **Resolved and committed as `254e8a1`, verified on hardware
-  2026-10-08:** `ppb::is_read_success(const Reply&)` accepts READ flags
-  `(flags & 0x7F) == 0x08` (so `0x08` and `0x88`, event bit ignored for
-  success but still reported via `event_pending()`) and is applied at
-  the scanner READ sites (`read_module`, bridge-info, `read_fixed`)
-  plus the client warn gate; `is_success()` semantics untouched; five
-  unit tests added (READ `0x08`/`0x88` accepted, `0x88` event bit
-  reported, invalid flags rejected, ordinary statuses unchanged).
-  Live confirmation: `identify` now completes end-to-end.
-
-- **Module-info (`0x07`, 12 bytes) payload semantics — lab unit
-  diverges from the corpus, and its light payload is partly volatile.**
-  Both captured replies (unit 16402) share the layout
-  `0f/10 .. 00 00 '12345' 00 00` with a 5-byte ASCII id at `[5..9]`; the
-  lab unit (010-203-04) answers the byte-identical request with
-  `04 20 40 12 04 c0 21 02 00 00 92 00` (light, 2026-10-08) /
-  `02 20 00 a0 00 8c 08 00 00 20 00 00` (motor) — no printable run.
-  **2026-10-09: the light bytes `[0..3]` changed to `82 02 d4 01` while
-  `[4..11]` stayed identical across all three reads, and the motor
-  payload is byte-identical across both days.** Today's prefix has the
-  same `82 02` shape as the same-session temperature read
-  (`82 02 d2 01`, u16 468 vs 466) — consistent with a power-on
-  temperature-like snapshot `[SPECULATIVE]`; 2026-10-08's
-  `04 20 40 12` does not fit that pattern (conflicting sample; was the
-  unit power-cycled between sessions? not recorded). Open: what each
-  byte means, and whether it matters that the OEM stack writes
-  PICL/PICM reg `0x03` = `01` immediately before each module-info read
-  (`base4.jsonl` events 145/154) while our sequence does not. The
-  decoder now shows only the capture-evidenced `[5..9]` window when it
-  is printable, else raw hex — it never fabricates strings.
-- HOST poll reply on the lab unit is 6 bytes (`03 04 10 88 aa aa`,
-  count 4) vs the corpus 5-byte form — meaning of the second `0xaa` and
-  why the count differs `[UNKNOWN]`.
-- Status-register values: CCD `0x12` (corpus unit `0x00`), light status
-  `80 02` (= corpus), temperature payload `82 02 d2 01` — byte0 varies
-  across all observed readings (80/82/85), byte1 fixed `0x02`, u16 LE
-  = 466 here vs 312–314 in captures; deci-°C (46.6 °C vs 31.2–31.4 °C)
-  plausible `[INFERRED]` from drift/variation, unproven; bit meanings
-  `[UNKNOWN]`.
-- HOST reg `0x03` bridge-info semantics (observed `0f 03`).
-- Whether reading `0x88` (temperature) is valid on F-135 (non-Plus).
-- Exact meaning of WRITE/CMD `data[1]` byte: "payload length" vs
-  "sub-register index" fit the two verbatim ppb-protocol.md examples
-  equally; captures are consistent with payload length (every WRITE obeys
-  `len = payload_len + 3`), adopted as such — still worth an
-  interventional check on hardware.
-- Stale-reply edge after a tolerated handshake timeout (address-echo check
-  guards it; behavior untested on hardware).
-
-## NEXT RECOMMENDED STEP
-
-1. Re-run the MSVC build + CTest (expect 4 suites / 45 cases) on the
-   Windows target, then run the read-only attribution diagnostic
-   (`pakon-cli attrib`) against the enumerated F135 — it completes
-   [BOOT_CHAIN.md](BOOT_CHAIN.md) § 6 (`DeviceDesc` / `FriendlyName` /
-   bound INF; no device I/O).
-2. Implement the loader per [LOADER_DESIGN.md](LOADER_DESIGN.md),
-   component by component, each gated on its replay test **and** an
-   explicit hardware go-ahead; `tools/pakon_boot_reference.ps1` stays
-   the trusted procedure until each C++ step is validated against it.
-3. Then: physical `list` → `identify` → `status` on the warm unit, in
-   that order, with `--log trace` captured for the record (first PPB
-   traffic from this stack on hardware).
-4. Phase 5: init/scan/teardown sequences from command-reference.md +
-   capture replays, still without motion until explicitly approved.
+- OEM_RE §12 open questions (LED clock, unexplained registers, DX formula,
+  film-end algorithm, the lamp/TEC/Corrections/ScanPictures sequence not
+  yet observed dynamically — needs the real KODAKCMS/ekjpegi/xerces DLLs).
+- Image pipeline (flat-field, Digital ICE, colour/"Pakon look"): not
+  started; the seams are recorded in OEM_RE §13 and the raw output keeps
+  everything it needs.
+- C++ FX2 loader ([LOADER_DESIGN.md](LOADER_DESIGN.md)); the PowerShell
+  reference procedure remains the boot path.

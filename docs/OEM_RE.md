@@ -439,7 +439,72 @@ base-config.reg]`).
 
 ## 11. Dynamic RE (TLXClientDemo/tlx/TLB under Wine against the simulator)
 
-Filled in by the dynamic runs (see the end of this document).
+### 11.1 Setup
+
+The unmodified OEM COM server runs under Wine 11.19 (WoW64) with
+`pakon-tlx-macos`'s `pkusb.dll` in place of the kernel driver; pkusb's five
+hooked device calls go over TCP to `pakon_sim_server`
+(`tests/support/sim_server.cpp`), the simulator of `tests/support/sim_device.*`.
+**No scanner is attached and no USB I/O happens.** `tools/wine/oem_client.cpp`
+drives `tlx.dll` from a script (interfaces, vtable slots and parameter types
+from tlx's type library at run time), `tools/wine/run_oem.sh` runs one
+session and logs it in the corpus schema. Prefix steps, in order:
+
+1. copy `F-X35 COM SERVER` + the `*71.dll` runtimes to `C:\Pakon\F-X35 COM
+   Server`; `C:\Program Files\Pakon` must resolve to it — TLB loads
+   `C:\Program Files\Pakon\F-X35 COM Server\PakonImau.dll` by that literal
+   path `[DYN init5: EC_FileNotFound (128)]`;
+2. `regsvr32` tlx/TLA/TLB/TLC on the pristine copies, then patch the
+   `VERSION.dll` import of the copied TLB.dll/tlx.dll to `pkusb.dll`;
+3. `reg import` `anselinstalldir\minilab.reg` and pakon-tlx-macos
+   `setup/base-config.reg` into both registry views; create the Ansel
+   capability directories under `anselinstalldir\dataPathItems`;
+4. PakonIMAu.dll imports `ekjpegi.dll`, `KODAKCMS.dll`, `xerces-c_2_2_0.dll`,
+   which are not in this OEM bundle; `tools/wine/make_stubs.py` builds
+   loader stand-ins that log any call.
+
+### 11.2 What the runs showed
+
+`InitializeScanner(1, 20000)` against the simulator `[DYN init6]`:
+
+- Order: `HostReset` → `HostSetMode` → probe `0x44` (acked, so `0x24` is
+  **never** probed) → **EEPROM read** → bridge version `HOST 0x03` →
+  `PICM 0x97 = 01` → per controller `0x03 = 01` + `READ 0x07` (light, then
+  motor) → panel LEDs `PICM 0x82 sub9 = 0x0118`. The EEPROM is read right
+  after the probe, before the version and pre-init writes.
+- EEPROM: read-select `0xA4/0x00A5` before **every** `0xA9` chunk; section A
+  primary (8 + 12×32 + 6 bytes) then section B primary (8 + 28) — **the
+  backup copy is read only when the primary fails its CRC**, which is why
+  unit 16402's capture (corrupt A primary) also reads the A backup
+  `[CAP base4.jsonl]`. TLB parsed the simulator's EEPROM as serial 17373,
+  hardware version 400 (`GetScannerInfo000`). No `0xA2`, no write-select.
+- `Awake` progress: `(0, 0)`, `(0, 1000)` (`WTO_InitializeProgress`
+  start), `(1, 3000)`.
+- The run stops in `CiScanner::bInit2` initialising PakonIMAu: with the stubs
+  the next calls are `KODAKCMS!SpInitialize`, `SpProfileLoadProfile`,
+  `SpXformGet`, `SpXformGetChannels`, `SpXformGetDesc` `[DYN init8]` — Kodak
+  CMS is genuinely used during scanner initialisation (colour transforms are
+  built before any scan). Without the real KODAKCMS.dll the OEM stack cannot
+  pass init, so the lamp/TEC init block, Corrections and ScanPictures were
+  **not** observed dynamically; those sections rest on `[DIS]` and `[CAP]`.
+
+### 11.3 This stack vs the OEM (compare_sessions)
+
+`tools/compare_sessions.py` of the corpus `base4.jsonl` (OEM, unit 16402)
+against this runner's simulated base4 session (`sim_scan_test` with
+`PAKON_SESSION_DIR`) — every remaining difference, explained:
+
+| Difference | Why |
+|---|---|
+| A[0:10] connect/identify absent from B | the runner starts after `Scanner::identify`, which sends them (tests/scanner) |
+| pixel end `0x0406` vs `0x0404`, film start `0x1e` vs `0x1c`, motor rate `0x647e` vs `0x620c` | per-unit EEPROM Offset/speed: 16402 (30, 25726) vs the simulated 17373 (28, 25100) — F3 fixed |
+| OEM writes `0x81` once (B6 R3 G9) and no LED servo; B ramps currents from 1 | the OEM reused stored Corrections (§7); B runs the full servo (fresh install behaviour) |
+| A/D offset and on-time values differ | data-dependent servo results (simulated optics) |
+| B's film on-times saturate (0x1c0) | simulated calibration on-times × the film boost exceed the base; on a real unit they follow the measured whites |
+| OEM `DX start` (`PICL 0x91`) before warm-up; B after acquire | placement only; the DX reader is not used by this stack |
+| B rewrites `PICL 0x80 = 00` and `0x89 = 00` at the calibration start, and the idle control word once more in teardown | redundant idempotent writes |
+| B's tail `rate 0 → go → 0xA2`; OEM's tail panel LEDs `0x0217 → 0x0017` | the bridge stop sequence this project keeps on every path (§12); panel LEDs are cosmetic |
+| EEPROM: B (pakon-cli) always reads both A copies | harmless extra reads; the OEM reads the backup only on a CRC failure (§11.2) |
 
 ## 12. Open questions
 
@@ -448,3 +513,43 @@ Filled in by the dynamic runs (see the end of this document).
 - The DX word formula; the film start/end detection algorithm (§10).
 - Whether the bridge's `rate=0 → go → idle` stop does anything the OEM's
   acquire-off + `0xA2` does not (the OEM never sends a rate below 1000).
+- The lamp/TEC init block, Corrections and ScanPictures have not been
+  observed dynamically (§11.2: needs the real KODAKCMS/ekjpegi/xerces DLLs).
+
+## 13. Processing-pipeline seams (for later work)
+
+Not implemented here; recorded so the image pipeline can be built on top of
+the raw output without more archaeology.
+
+- **What the scanner delivers** is linear 16-bit RGB (+IR) lines; everything
+  else is host processing. This stack stores it losslessly: `.pakraw` (rows
+  verbatim, IR lane flagged) plus `<prefix>.scan.json` (`scan/sidecar.hpp`:
+  geometry of both windows, EEPROM values, A/D offsets/gains, LED currents
+  and on-times for calibration and film, per-pixel dark and open-gate
+  references, film start/end lines).
+- **TLB → PakonIMAu.dll** (image processing, "Pakon look") through 17 entry
+  points resolved by name: `PIBegin`, `PIEnd`, `PIFileOpenPlanar`,
+  `PIColorCorrectColNegPlanarScan`, `PIColorCorrectColNegPlanarSave`,
+  `PIColorCorrectColRevPlanar`, `PIColorAdjustPlanar`, `PIRotatePlanar`,
+  `PIScaleAndRotatePlanar`, and the Ansel scene-balance set
+  `PIAnselStartNewRoll`, `PIAnselAddScene`, `PIAnselAnalyzeScene`,
+  `PIAnselAnalyzeRoll`, `PIAnselColorSceneBalancePlanar`,
+  `PIAnselDeleteScene`, `PIAnselDeleteRoll`, `PIAnselEndRoll`
+  `[DIS TLB strings]`. PakonIMAu needs KODAKCMS.dll (18 `Sp*` CMS calls),
+  ekjpegi.dll (JPEG), xerces-c 2.2 (XML) — not in this OEM bundle — and the
+  data in `Config\ColorCorrection` (`*.pf` profiles, `ClientColNeg*`
+  matrices/LUTs) and `anselinstalldir\dataPathItems` (`sba`, `deRender`,
+  `filmLut`, … one directory per Ansel capability).
+- **Digital ICE is `DMLDICELib.dll`**, self-contained (imports KERNEL32
+  only): `DMLDICEBegin(unsigned long, DICEInfoStaticTag) → handle`,
+  `DMLDICEProcess(handle, DICEInfoDynamicTag)`,
+  `DMLDICEDefectCount(handle, DICEInfoDynamicTag, unsigned long*,
+  unsigned long*)`, `DMLDICEEnd(handle)`, `DICEVersion()` (MSVC-mangled,
+  cdecl). The tag structs are passed by value; their layout is `[UNKNOWN]`
+  (recoverable from TLB's call sites). It needs the IR plane captured in the
+  same pass — `UseScratchRemoval` (`iScanControl | 8`) is what turns the IR
+  LED on (§9), i.e. the `-ir` modes here.
+- Two routes stay open: run these 32-bit DLLs in a small Win32 helper
+  process fed from `.pakraw` + sidecar, or reimplement. Either way the
+  scanner side is unchanged.
+

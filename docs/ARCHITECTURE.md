@@ -7,7 +7,12 @@ primary specification; nothing in this repository invents protocol.
 ## Layers
 
 ```
-apps/pakon-cli                command-line tool (list / probe / identify / status)
+apps/pakon-cli                command-line tool (list / probe / identify / status /
+        │                     eeprom / scan)
+src/pakon/scan                runner (OEM scan state machine), device wrapper,
+        │                     Corrections, line sync, film detector, teardown,
+        │                     sidecar; image/ (PAKRAW, TIFF) for output
+src/pakon/stream, eeprom      EP6 stream (IBulkInPipe), read-only EEPROM reader
         │
 src/pakon/scanner             session + state machine + model detection
         │
@@ -31,6 +36,12 @@ Rules enforced by this layering:
 
 - `ppb` never includes Windows headers; it talks to `usb::IUsbTransport` only.
 - `scanner` never builds raw frames; it uses `ppb::Client`.
+- `scan` builds frames only through `protocol/scan_commands.hpp` and sends
+  them through `ICommandChannel`; image bytes come only through
+  `stream::IImageStream`. Every frame that lights the lamp or moves the
+  motor is paired with the teardown in `ScanDevice::teardown()`.
+- `eeprom` sends only requests that pass the compile-time allow-list
+  (`eeprom::is_allowed`); the WinUSB backend re-checks every vendor request.
 - `bootstrap` may issue only the documented stage-1 personality read
   (`0xA9`, `wIndex 0`) — no bulk, no control writes (test-pinned).
 - `protocol/` constants are documented against specific pakon-reference files
@@ -131,9 +142,9 @@ layers against the non-Windows USB stub so tests run anywhere. See
 | 3 | PPB packet infrastructure | done |
 | 4 | safe comms: identify/status | done, physical check pending |
 | — | bootstrap: evidence survey + read-only probe (`pakon-cli probe`) | done, hardware check pending (BOOTSTRAP.md) |
-| 5 | scanner state machine (init/scan sequences) | not started |
-| 6 | transport (film motion) | not started |
-| 7 | image acquisition | not started |
-| 8 | image decoding | not started |
-| 9 | calibration (read-only EEPROM) | not started |
-| 10 | output (TIFF/JPEG) | not started |
+| 5 | scanner state machine (init/scan sequences) | done, simulator-verified; hardware pending (HARDWARE_RUNBOOK.md) |
+| 6 | transport (film motion) | done (film window, motor rate from EEPROM), hardware pending |
+| 7 | image acquisition | done (concurrent EP6 stream), hardware pending |
+| 8 | image decoding | line sync/framing done; processing (flat-field, ICE, colour) not started — OEM_RE.md §13 |
+| 9 | calibration (read-only EEPROM + Corrections) | done, hardware pending |
+| 10 | output | PAKRAW + 16-bit TIFF preview + scan.json sidecar |
