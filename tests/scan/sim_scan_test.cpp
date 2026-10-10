@@ -317,6 +317,21 @@ PAKON_TEST(first_light_keeps_dark_and_white_lines_and_never_moves_the_motor) {
     const auto& c = o.result.corrections;
     EXPECT(c.dark.lines == 32);
     EXPECT(c.white.lines == 32);
+    // Per-line means for every averaged line; each dark round logs their
+    // spread (film2 hardware run, 2026-10-10: the dark level jumped
+    // between rounds at an unchanged offset).
+    EXPECT_EQ(c.dark.line_means.size(), 3u);
+    for (const auto& m : c.dark.line_means) {
+        EXPECT_EQ(m.size(), 32u);
+    }
+    std::size_t dark_lines = 0;
+    for (const auto& l : c.log) {
+        if (l.starts_with("dark round")) {
+            ++dark_lines;
+            EXPECT(l.find(" | line means R ") != std::string::npos);
+        }
+    }
+    EXPECT_EQ(dark_lines, c.dark_rounds);
     EXPECT(c.currents.r >= 1 && c.currents.r <= 4);
     EXPECT(c.currents.g >= 1 && c.currents.g <= 20);
     // Dark level converged into the OEM target band on the masked pixels.

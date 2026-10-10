@@ -35,6 +35,21 @@ double mean(const std::vector<double>& plane, std::size_t from, std::size_t to) 
     return s / static_cast<double>(to - from);
 }
 
+// " | line means R lo..hi G lo..hi B lo..hi": the per-line spread inside
+// one averaged measurement, for the hardware logs.
+std::string line_spread(const LineAverage& avg) {
+    std::string s = " | line means";
+    for (std::size_t c = 0; c < 3 && c < avg.line_means.size(); ++c) {
+        const auto& m = avg.line_means[c];
+        if (m.empty()) {
+            continue;
+        }
+        const auto [lo, hi] = std::minmax_element(m.begin(), m.end());
+        s += std::format(" {} {:.0f}..{:.0f}", "RGB"[c], *lo, *hi);
+    }
+    return s;
+}
+
 double peak(const std::vector<double>& plane, std::size_t from) {
     double m = 0;
     for (std::size_t i = from; i < plane.size(); ++i) {
@@ -105,6 +120,7 @@ Result<CorrectionsResult> run_corrections(ScanDevice& device, LineReader& lines,
                 out.offsets[c] = std::clamp(out.offsets[c] + step, -255, 255);
             }
         }
+        line += line_spread(*avg);
         log(std::move(line));
     }
     if (!(settled[0] && settled[1] && settled[2])) {

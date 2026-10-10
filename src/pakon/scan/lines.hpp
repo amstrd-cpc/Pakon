@@ -29,6 +29,10 @@ struct LineAverage {
     std::size_t pixels{0};
     std::size_t lines{0};
     std::vector<std::vector<double>> planes; // [channel][pixel]
+    // Each averaged line's mean over all its pixels ([channel][line]):
+    // tells a level that moves inside one measurement from one that
+    // steps between measurements.
+    std::vector<std::vector<double>> line_means;
 };
 
 class LineReader {

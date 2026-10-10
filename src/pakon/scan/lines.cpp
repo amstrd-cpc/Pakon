@@ -1,6 +1,7 @@
 #include "pakon/scan/lines.hpp"
 
 #include <algorithm>
+#include <array>
 #include <format>
 
 namespace pakon::scan {
@@ -125,18 +126,28 @@ Result<LineAverage> LineReader::average(std::size_t lines, std::chrono::millisec
     avg.pixels = pixels_;
     const std::size_t channels = pixels_ == 0 ? 0 : stride_ / pixels_;
     avg.planes.assign(channels, std::vector<double>(pixels_, 0.0));
+    avg.line_means.assign(channels, {});
+    for (auto& m : avg.line_means) {
+        m.reserve(lines);
+    }
     for (std::size_t n = 0; n < lines; ++n) {
         auto line = next_line(timeout);
         if (!line) {
             return line.error();
         }
+        std::array<double, 4> sums{};
         for (std::size_t p = 0; p < pixels_; ++p) {
             for (std::size_t c = 0; c < 3 && c < channels; ++c) {
                 avg.planes[c][p] += (*line)[3 * p + c];
+                sums[c] += (*line)[3 * p + c];
             }
             if (channels == 4) {
                 avg.planes[3][p] += (*line)[3 * pixels_ + p];
+                sums[3] += (*line)[3 * pixels_ + p];
             }
+        }
+        for (std::size_t c = 0; c < channels && c < sums.size(); ++c) {
+            avg.line_means[c].push_back(sums[c] / static_cast<double>(pixels_));
         }
         ++avg.lines;
     }
