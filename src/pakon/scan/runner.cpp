@@ -317,6 +317,7 @@ VoidResult ScanRunner::run_phases(ScanDevice& device, stream::IImageStream& stre
     img.geometry.samples_per_row = static_cast<std::uint32_t>(fg.samples_per_line());
     FilmDetector detector(fg.pixels());
     const auto window_start = Clock::now();
+    const auto bytes_at_start = stream.stats().bytes_in;
     auto last_poll = Clock::now();
     bool film_seen = false;
     while (true) {
@@ -361,7 +362,13 @@ VoidResult ScanRunner::run_phases(ScanDevice& device, stream::IImageStream& stre
             return c;
         }
     }
+    // Line period from what the device delivered during the window, not
+    // from how fast this thread consumed it (a slow consumer lags behind
+    // a ring that is still filling at the device's rate).
     const double window_s = seconds_since(window_start);
+    const double delivered_lines =
+        static_cast<double>(stream.stats().bytes_in - bytes_at_start) /
+        static_cast<double>(2 * fg.samples_per_line());
     // The HOST ends the window: acquire off (stream stops), LEDs.
     if (auto r = device.panel_leds(kLedFilmEnd); !r) {
         return r;
@@ -372,7 +379,7 @@ VoidResult ScanRunner::run_phases(ScanDevice& device, stream::IImageStream& stre
     result_.film_start_line = detector.film_start();
     result_.film_end_line = detector.film_end();
     result_.resyncs = lines.resyncs();
-    result_.line_period_ms = img.rows() == 0 ? 0 : window_s * 1000.0 / static_cast<double>(img.rows());
+    result_.line_period_ms = delivered_lines < 1 ? 0 : window_s * 1000.0 / delivered_lines;
     result_.phases.push_back({"film window", seconds_since(t)});
     return {};
 }

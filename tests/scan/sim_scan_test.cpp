@@ -70,9 +70,13 @@ private:
     std::size_t count_{0};
 };
 
+// 4x the real line rate. Instrumented builds (TSan slows the consumer
+// ~10x) set PAKON_SIM_SPEED lower: the ring would otherwise overflow -
+// correctly - because the consumer really is slower than the device.
 sim::SimConfig fast_sim() {
     sim::SimConfig c;
-    c.speed = 4.0;
+    const char* speed = std::getenv("PAKON_SIM_SPEED");
+    c.speed = speed ? std::atof(speed) : 4.0;
     c.command_latency = 300us;
     c.lamp_ready_delay = 50ms;
     return c;
