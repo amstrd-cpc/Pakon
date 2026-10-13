@@ -13,8 +13,9 @@
 //      and below the ceiling; then on-time = start × (n−1)/n
 //                                                    (TLB@0x1001e7b0);
 //   5. on-time servo: duty × 63968/peak (IR 39968) into [0xF9C0, 0xFA00];
-//      a channel that needs duty > 1 gets current +1 (below ceiling), else
-//      A/D gain +1 (≤ 0x3E), else EC_InsufficientLight (TLB@0x1001ec90);
+//      a channel that needs more than its start on-time (IR: 1.0) gets
+//      current +1 (below ceiling), else A/D gain +1 (≤ 0x3E), else
+//      EC_InsufficientLight (TLB@0x1001ec90);
 //   6. white (open-gate) reference with the final settings.
 //
 // Every value reaches the device through ScanDevice, so LED currents are

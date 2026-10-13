@@ -64,6 +64,7 @@ struct SimConfig {
     std::chrono::microseconds command_latency{2500};  // CAP: ~2.5 ms per exchange
     std::size_t device_fifo_bytes{4096};              // FX2 quad-buffered 512 B + slack
     std::optional<FilmModel> film;                    // nullopt = no film fed
+    std::array<double, 4> led_scale{1, 1, 1, 1};      // LED efficiency R G B IR
     std::optional<std::pair<std::size_t, FaultKind>> fault_at_frame;
     bool fault_sticky{false}; // after the fault every exchange fails (unplug)
     std::optional<std::uint64_t> stream_fault_after_bytes;

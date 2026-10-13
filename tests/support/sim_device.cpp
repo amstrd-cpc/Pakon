@@ -714,10 +714,10 @@ void SimDevice::produce_line_locked() {
     const double base = ontime_[5] == 0 ? 1.0 : ontime_[5];
     // currents/ontime slots: [B, IR, R, 0, G]
     const std::array<double, 4> light{
-        vis ? kLedEff[0] * currents_[2] * std::min(1.0, ontime_[2] / base) : 0.0,
-        vis ? kLedEff[1] * currents_[4] * std::min(1.0, ontime_[4] / base) : 0.0,
-        vis ? kLedEff[2] * currents_[0] * std::min(1.0, ontime_[0] / base) : 0.0,
-        irlit ? kLedEff[3] * currents_[1] * std::min(1.0, ontime_[1] / base) : 0.0};
+        vis ? kLedEff[0] * config_.led_scale[0] * currents_[2] * std::min(1.0, ontime_[2] / base) : 0.0,
+        vis ? kLedEff[1] * config_.led_scale[1] * currents_[4] * std::min(1.0, ontime_[4] / base) : 0.0,
+        vis ? kLedEff[2] * config_.led_scale[2] * currents_[0] * std::min(1.0, ontime_[0] / base) : 0.0,
+        irlit ? kLedEff[3] * config_.led_scale[3] * currents_[1] * std::min(1.0, ontime_[1] / base) : 0.0};
     std::array<double, 3> dark{};
     for (std::size_t c = 0; c < 3; ++c) {
         dark[c] = std::max(kDarkBase[c] + kDarkSlope[c] * offsets_[c], 0.0);

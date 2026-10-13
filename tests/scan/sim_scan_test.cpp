@@ -497,6 +497,29 @@ PAKON_TEST(a_row_cap_that_cannot_fit_in_memory_fails_before_the_motor_moves) {
     expect_safe_end(o);
 }
 
+// A green LED too weak to reach the white target at its start on-time:
+// the on-time stays at the start value and the current, then the A/D
+// gain, rise instead, so the boosted film on-time never clamps (OEM on
+// this unit, Base 16 IR: G 240/599 at current 24, gain 13 → 16).
+PAKON_TEST(a_weak_channel_raises_current_and_gain_not_its_on_time) {
+    auto scfg = fast_sim();
+    scfg.led_scale = {1.0, 0.7, 1.0, 1.0}; // G at 24 x 0.400 just short
+    auto o = run(scfg, fast_runner({scan::Base::b16, true}, scan::ScanKind::first_light));
+    EXPECT(o.ok);
+    if (!o.ok) {
+        std::fprintf(stderr, "  %s\n", o.error.c_str());
+    }
+    const auto& c = o.result.corrections;
+    EXPECT_EQ(c.currents.g, 24); // the 0x44 IR-lit ceiling
+    EXPECT(c.gains[1] > 13);
+    EXPECT(c.duties.r <= scan::kServoStartDuty[0] + 1e-9);
+    EXPECT(c.duties.g <= scan::kServoStartDuty[1] + 1e-9);
+    EXPECT(c.duties.b <= scan::kServoStartDuty[2] + 1e-9);
+    EXPECT(c.duties.g * scan::kFilmBoost[1] <= 1.0 + 1e-9);
+    expect_teardown_exactly_once(o);
+    expect_safe_end(o);
+}
+
 // A row cap shorter than the film ends the image window but not the
 // transport: the motor runs on until the DX sensor reads clear, so no
 // film is left in the path (a full roll stuck at the cap, 2026-10-13).

@@ -227,8 +227,14 @@ Result<CorrectionsResult> run_corrections(ScanDevice& device, LineReader& lines,
                 }
                 seen[c] = {seen[c][1], q};
                 const double next = pk <= 0 ? *duty[c] * 2 : *duty[c] * target / pk;
-                if (next > 1.0) {
-                    *duty[c] = 1.0;
+                // R, G, B are capped at their start on-time, not 1.0, so the
+                // boosted film on-time stays ≤ 1.0: the OEM held G at 0.400
+                // (240/599) at its ceiling and raised the A/D gain 13 → 16
+                // [CAP 17373 oem-base16-ir.jsonl 17.109-23.640]; capped at
+                // 1.0 this stack ended at 0.411 and clamped the film G
+                // (film16ir1, 2026-10-13).
+                if (next > start[c]) {
+                    *duty[c] = start[c];
                     more[c] = true;
                     done[c] = true;
                 } else {
