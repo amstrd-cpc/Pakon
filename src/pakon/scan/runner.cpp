@@ -24,15 +24,6 @@ constexpr std::uint16_t kLedScanning = 0x0295;
 constexpr std::uint16_t kLedFilmSeen = 0x0215;
 constexpr std::uint16_t kLedFilmEnd = 0x02D4;
 
-// Film-pass on-time boost for colour negative: the per-channel ratio of
-// film to open-gate on-times in base4.jsonl (0x0170/0x0047,
-// 0x014F/0x00F1, 0x01A8/0x00A9 at 22.117 vs 24.832) — the OEM's
-// DutyCycle vs DutyCycleOpenGate pair (= 10^D of the film base).
-// [CAPTURE-derived, INFERRED to be a film-type constant.]
-constexpr double kBoostR = 1.39;
-constexpr double kBoostG = 2.51;
-constexpr double kBoostB = 5.18;
-
 double seconds_since(Clock::time_point t) {
     return std::chrono::duration<double>(Clock::now() - t).count();
 }
@@ -296,9 +287,9 @@ VoidResult ScanRunner::run_phases(ScanDevice& device, stream::IImageStream& stre
     }
     const auto& cr = result_.corrections;
     Duties film = cr.duties;
-    film.r = std::min(1.0, film.r * kBoostR);
-    film.g = std::min(1.0, film.g * kBoostG);
-    film.b = std::min(1.0, film.b * kBoostB);
+    film.r = std::min(1.0, film.r * kFilmBoost[0]);
+    film.g = std::min(1.0, film.g * kFilmBoost[1]);
+    film.b = std::min(1.0, film.b * kFilmBoost[2]);
     result_.film_duties = film;
     if (auto r = device.lamp_on(true, mode.ir, cr.currents, integ, film); !r) {
         return r;

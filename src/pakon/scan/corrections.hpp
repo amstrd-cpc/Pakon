@@ -8,9 +8,10 @@
 //      rounds of 32-line averages over the masked pixels, target 300 ±32,
 //      step trunc(−(mean − 300) × 3/112)            (TLB@0x1001e1c0);
 //   3. dark reference (IR plane on first in IR modes);
-//   4. LED-current servo: from 1, +1 while the peak stays ≤ 0xFA00 (R, G),
-//      0xFFDC (B), 0x9C40 (IR) and below the ceiling; on-time fraction
-//      (n−1)/n                                       (TLB@0x1001e7b0);
+//   4. LED-current servo: from 1 at the start on-times kServoStartDuty,
+//      +1 while the peak stays ≤ 0xFA00 (R, G), 0xFFDC (B), 0x9C40 (IR)
+//      and below the ceiling; then on-time = start × (n−1)/n
+//                                                    (TLB@0x1001e7b0);
 //   5. on-time servo: duty × 63968/peak (IR 39968) into [0xF9C0, 0xFA00];
 //      a channel that needs duty > 1 gets current +1 (below ceiling), else
 //      A/D gain +1 (≤ 0x3E), else EC_InsufficientLight (TLB@0x1001ec90);
@@ -43,6 +44,22 @@ inline constexpr std::uint32_t kPeakBlue = 0xFFDC;
 inline constexpr std::uint32_t kPeakIr = 0x9C40;
 inline constexpr double kDutyTarget = 63968.0;
 inline constexpr double kDutyTargetIr = 39968.0;
+
+// Colour-negative film boost R, G, B: film-pass on-time = open-gate
+// on-time × boost (the OEM's DutyCycle vs DutyCycleOpenGate pair, ~10^D
+// of the film base). From unit 16402's film/open-gate ratios [CAP
+// base4.jsonl 22.117 vs 24.832]; this unit's OEM run gives 1.397 2.514
+// 5.05 [CAP 17373 oem-base4.jsonl 67.628 vs 68.106, 2026-10-13].
+inline constexpr std::array<double, 3> kFilmBoost{1.39, 2.51, 5.18};
+// The OEM runs the LED-current servo at these on-times, not at 1.0:
+// 324/180/87 of base 450 at currents 1 [CAP 17373 oem-base4.jsonl
+// 56.325], ~1/boost per channel, so the currents climb until the
+// BOOSTED film on-time fits (ended at R3 G14 B7; this stack's 1.0 start
+// ended at R2 G3 B2 and clipped the film boost). Back-offs (n−1)/n scale
+// this start (64.750: 0.480 0.371 0.167). Their source in TLB is
+// [UNKNOWN]; the values are the captured ones (180/450 is 0.400 exactly,
+// not 1/2.51). IR start 1.0: no IR capture yet.
+inline constexpr std::array<double, 3> kServoStartDuty{0.720, 0.400, 0.193};
 
 struct CorrectionsResult {
     std::array<int, 3> offsets{};               // A/D offsets R, G, B

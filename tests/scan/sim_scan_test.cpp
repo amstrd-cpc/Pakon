@@ -350,6 +350,29 @@ PAKON_TEST(first_light_keeps_dark_and_white_lines_and_never_moves_the_motor) {
                             (f[0] == 0x02 && f[4] == 0xA5));
         EXPECT(!motor);
     }
+    // The LED-current servo starts at currents 1 with on-times 1/boost:
+    // the OEM's 324/180/87 of base 450 on this unit [CAP 17373
+    // oem-base4.jsonl 56.320/56.325, 2026-10-13].
+    bool checked = false;
+    for (std::size_t i = 0; i + 1 < end && !checked; ++i) {
+        const auto& f = o.frames[i];
+        if (f.size() >= 10 && f[0] == 0x02 && f[2] == 0x40 && f[4] == 0x81 && f[5] == 1 &&
+            f[7] == 1 && f[9] == 1) {
+            for (std::size_t j = i + 1; j < end; ++j) {
+                const auto& g = o.frames[j];
+                if (g.size() >= 17 && g[0] == 0x02 && g[2] == 0x40 && g[4] == 0x82) {
+                    const auto u16 = [&](std::size_t k) { return g[5 + 2 * k] | (g[6 + 2 * k] << 8); };
+                    EXPECT_EQ(u16(0), 87);  // B
+                    EXPECT_EQ(u16(2), 324); // R
+                    EXPECT_EQ(u16(4), 180); // G
+                    EXPECT_EQ(u16(5), 450); // base
+                    checked = true;
+                    break;
+                }
+            }
+        }
+    }
+    EXPECT(checked);
     // The sidecar carries the calibration references for later processing.
     const auto json = scan::sidecar_json(o.result);
     EXPECT(json.find("\"schema\":\"pakon-scan/1\"") != std::string::npos);

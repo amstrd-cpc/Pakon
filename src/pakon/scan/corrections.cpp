@@ -143,11 +143,13 @@ Result<CorrectionsResult> run_corrections(ScanDevice& device, LineReader& lines,
         out.dark = std::move(*dark);
     }
 
-    // 4. LED-current servo from 1 at full on-time.
+    // 4. LED-current servo from 1 at the open-gate start on-times.
     const bool ir = cfg.mode.ir;
     const auto ceiling = ps::led_ceiling(device.addresses().motor, ir);
+    const std::array<double, 4> start{kServoStartDuty[0], kServoStartDuty[1], kServoStartDuty[2],
+                                      ir ? 1.0 : 0.0};
     out.currents = {1, 1, 1, static_cast<std::uint8_t>(ir ? 1 : 0)};
-    out.duties = {1.0, 1.0, 1.0, ir ? 1.0 : 0.0};
+    out.duties = {start[0], start[1], start[2], start[3]};
     // 0 = searching, 1 = at ceiling, 2 = saturated (peak above target)
     std::array<int, 4> state{0, 0, 0, ir ? 0 : 2};
     const std::uint32_t limits[4] = {kPeakVisible, kPeakVisible, kPeakBlue, kPeakIr};
@@ -182,8 +184,9 @@ Result<CorrectionsResult> run_corrections(ScanDevice& device, LineReader& lines,
             break;
         }
     }
-    out.duties = {back_off(out.currents.r), back_off(out.currents.g), back_off(out.currents.b),
-                  ir ? back_off(out.currents.ir) : 0.0};
+    out.duties = {start[0] * back_off(out.currents.r), start[1] * back_off(out.currents.g),
+                  start[2] * back_off(out.currents.b),
+                  ir ? start[3] * back_off(out.currents.ir) : 0.0};
 
     // 5. On-time (duty) servo with the need-more-light escalation.
     for (int outer = 0; outer < 64; ++outer) {
@@ -248,7 +251,7 @@ Result<CorrectionsResult> run_corrections(ScanDevice& device, LineReader& lines,
             if (*cur[c] < ceil[c]) {
                 ++*cur[c];
                 double* duty[4] = {&out.duties.r, &out.duties.g, &out.duties.b, &out.duties.ir};
-                *duty[c] = back_off(*cur[c]);
+                *duty[c] = start[c] * back_off(*cur[c]);
             } else if (c < 3 && out.gains[c] < kGainCodeMax) {
                 ++out.gains[c];
             } else {
