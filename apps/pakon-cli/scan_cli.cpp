@@ -292,6 +292,12 @@ void print_stats(std::FILE* out, const scan::ScanResult& r, std::size_t pixels) 
                          r.film_end_line ? std::to_string(*r.film_end_line).c_str() : "?");
         }
         std::fprintf(out, "\n  motor rate %u\n", r.motor_rate);
+        if (r.run_out.ran) {
+            std::fprintf(out, "  run-out: motor ran %.1f s after the row cap, %s\n",
+                         r.run_out.seconds,
+                         r.run_out.cleared ? "DX sensor clear"
+                                           : "LIMIT REACHED - film may still be in the path");
+        }
     }
     std::fprintf(out, "  stream: in %llu B, out %llu B, discarded %llu B, transfers %llu, "
                       "ring high-water %zu B,\n          overflows %llu (%llu B), transfer "

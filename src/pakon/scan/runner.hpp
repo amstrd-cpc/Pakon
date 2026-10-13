@@ -15,6 +15,8 @@
 //             the window ends on film end, no-film timeout or the row
 //             budget (hard cap) — always by the HOST clearing the
 //             acquire bit, never by waiting for the device to go quiet
+//   run-out   after the row cap only: lamp off, motor on, until the DX
+//             sensor reads clear (film is never left in the path)
 //   teardown  ScanDevice::teardown(), exactly once, on every path
 //             (success, error, Ctrl+C)
 //
@@ -53,6 +55,12 @@ struct RunnerConfig {
     std::chrono::milliseconds no_film_timeout{45000};   // capture: ~45 s
     std::chrono::milliseconds line_timeout{std::chrono::seconds(5)};
     double settle_scale{1.0};                // LED settle waits (tests: 0)
+    // Row cap reached with film still in the path: the motor runs on
+    // (acquire and lamp off) until the DX sensor reads clear for
+    // run_out_clear, at most run_out_limit. 0 = from the motor rate:
+    // 2 frames / 45 frames (a 36-exposure roll and its leader).
+    std::chrono::milliseconds run_out_clear{0};
+    std::chrono::milliseconds run_out_limit{0};
     const CancelToken* cancel{nullptr};
 };
 
@@ -82,6 +90,11 @@ struct ScanResult {
     std::size_t resyncs{0};
     double line_period_ms{0};
     std::vector<std::string> events; // service events seen
+    struct RunOut {
+        bool ran{false};
+        bool cleared{false}; // false: ended at the limit, film may remain
+        double seconds{0};
+    } run_out;
     TeardownReport teardown;
 };
 
@@ -103,6 +116,7 @@ public:
 private:
     explicit ScanRunner(RunnerConfig config) : config_(std::move(config)) {}
     VoidResult run_phases(ScanDevice& device, stream::IImageStream& stream);
+    VoidResult run_out(ScanDevice& device);
 
     RunnerConfig config_;
     ScanResult result_;

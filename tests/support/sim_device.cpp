@@ -706,18 +706,7 @@ void SimDevice::produce_line_locked() {
 
     // Film in the gate: lines move only while the drive runs.
     if (going_ && rate_ > 0) {
-        ++travel_lines_;
-        if (config_.film) {
-            const auto& f = *config_.film;
-            if (travel_lines_ == f.lead_lines) {
-                picl_status_ |= 0x20;
-                dx_flags_ = 0x10;
-            }
-            if (travel_lines_ == f.lead_lines + f.film_lines) {
-                picl_status_ |= 0x20;
-                dx_flags_ = 0;
-            }
-        }
+        advance_travel_locked();
     }
     const bool film_in = config_.film && travel_lines_ >= config_.film->lead_lines &&
                          travel_lines_ < config_.film->lead_lines + config_.film->film_lines;
@@ -764,14 +753,44 @@ void SimDevice::produce_line_locked() {
     ++lines_;
 }
 
+// DX film sensor like the unit: 0x20 while film passes, clear after the
+// tail (film2 service events, 2026-10-10).
+void SimDevice::advance_travel_locked() {
+    ++travel_lines_;
+    if (config_.film) {
+        const auto& f = *config_.film;
+        if (travel_lines_ == f.lead_lines) {
+            picl_status_ |= 0x20;
+            dx_flags_ = 0x20;
+        }
+        if (travel_lines_ == f.lead_lines + f.film_lines) {
+            picl_status_ |= 0x20;
+            dx_flags_ = 0;
+        }
+    }
+}
+
 void SimDevice::producer_loop() {
     [[maybe_unused]] const TimerResolution timer;
     std::unique_lock lock(mutex_);
     while (!quit_) {
         if ((control_ & 1) == 0) {
+            // Acquire off with the drive running (the run-out): the film
+            // still travels at the line rate.
+            const auto now = Clock::now();
+            if (going_ && rate_ > 0 && idle_tick_ != Clock::time_point{}) {
+                travel_accum_ += std::chrono::duration<double, std::micro>(now - idle_tick_).count() *
+                                 config_.speed / line_time_us_locked();
+                while (travel_accum_ >= 1.0) {
+                    advance_travel_locked();
+                    travel_accum_ -= 1.0;
+                }
+            }
+            idle_tick_ = now;
             stream_cv_.wait_for(lock, std::chrono::milliseconds(2));
             continue;
         }
+        idle_tick_ = Clock::time_point{};
         const auto now = Clock::now();
         const double line_bytes = std::max<double>(static_cast<double>(line_samples_locked()) * 2.0, 2.0);
         const double rate = line_bytes / (line_time_us_locked() * 1e-6) * config_.speed;
@@ -841,6 +860,10 @@ bool SimDevice::lamp_lit() const {
 bool SimDevice::motor_running() const {
     std::scoped_lock lock(mutex_);
     return going_;
+}
+std::uint64_t SimDevice::travel_lines() const {
+    std::scoped_lock lock(mutex_);
+    return travel_lines_;
 }
 std::array<std::uint8_t, 5> SimDevice::led_currents() const {
     std::scoped_lock lock(mutex_);

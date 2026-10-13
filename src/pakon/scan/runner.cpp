@@ -392,6 +392,70 @@ VoidResult ScanRunner::run_phases(ScanDevice& device, stream::IImageStream& stre
     result_.resyncs = lines.resyncs();
     result_.line_period_ms = delivered_lines < 1 ? 0 : window_s * 1000.0 / delivered_lines;
     result_.phases.push_back({"film window", seconds_since(t)});
+    if (result_.film_end == FilmEnd::row_budget) {
+        return run_out(device);
+    }
+    return {};
+}
+
+// The row cap ended the image window, but the film may still be in the
+// path: stopping the motor there left a roll stuck (2026-10-13, film3).
+// The OEM never stops the transport mid-film (OEM_RE.md §7 step 5), so
+// keep it running until the DX sensor reads clear. Film present = DX
+// flags & 0x30 (film2, 2026-10-10: 0x20/0x30 while the strip passed,
+// 0x10/0x00 after its tail). Frame time from film2: 9908 lines × 0.904 ms
+// over 6 frames = 1.49 s at motor rate 25676, scaling with 1/rate.
+VoidResult ScanRunner::run_out(ScanDevice& device) {
+    const auto t = Clock::now();
+    if (auto r = device.lamp_off(); !r) {
+        return r;
+    }
+    const double frame_s = 1.49 * 25676.0 / std::max(1000.0, static_cast<double>(result_.motor_rate));
+    const auto ms = [](double s) {
+        return std::chrono::milliseconds(static_cast<long long>(s * 1000.0));
+    };
+    const auto clear =
+        config_.run_out_clear.count() > 0 ? config_.run_out_clear : ms(2.0 * frame_s);
+    const auto limit =
+        config_.run_out_limit.count() > 0 ? config_.run_out_limit : ms(45.0 * frame_s);
+    log::Logger::instance().log(
+        log::Level::info,
+        "run-out: row cap reached, motor runs on until the DX sensor is clear for {:.1f} s "
+        "(limit {:.0f} s)",
+        clear.count() / 1000.0, limit.count() / 1000.0);
+    result_.run_out.ran = true;
+    auto last_film = Clock::now();
+    while (true) {
+        if (auto c = check_cancel(config_.cancel, "during the run-out"); !c) {
+            return c;
+        }
+        const auto now = Clock::now();
+        if (now - last_film >= clear) {
+            result_.run_out.cleared = true;
+            break;
+        }
+        if (now - t >= limit) {
+            break;
+        }
+        if (auto ev = device.poll_service(); !ev) { // keeps events acknowledged
+            return ev.error();
+        }
+        auto dx = device.read_dx_flags();
+        if (!dx) {
+            return dx.error();
+        }
+        if (*dx != 0) {
+            last_film = Clock::now();
+        }
+        std::this_thread::sleep_for(config_.poll_interval);
+    }
+    result_.run_out.seconds = seconds_since(t);
+    if (!result_.run_out.cleared) {
+        log::Logger::instance().log(log::Level::warn,
+                                    "run-out: limit reached with film still reported - check "
+                                    "the film path before the next scan");
+    }
+    result_.phases.push_back({"run-out", result_.run_out.seconds});
     return {};
 }
 

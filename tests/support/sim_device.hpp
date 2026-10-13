@@ -117,6 +117,7 @@ public:
     bool acquiring() const;
     bool lamp_lit() const;
     bool motor_running() const;
+    std::uint64_t travel_lines() const; // film transport, in line periods
     std::array<std::uint8_t, 5> led_currents() const; // [B, IR, R, 0, G]
     std::array<int, 3> ad_offsets() const;
     std::array<std::uint16_t, 3> ad_gains() const;
@@ -199,7 +200,10 @@ private:
     // Motor.
     std::uint16_t rate_{0};
     bool going_{false};
-    std::uint64_t travel_lines_{0}; // lines acquired while the film moves
+    std::uint64_t travel_lines_{0}; // line periods the film has moved
+    double travel_accum_{0};        // fractional line periods, acquire off
+    std::chrono::steady_clock::time_point idle_tick_{};
+    void advance_travel_locked();
 
     // Stream.
     std::vector<std::uint8_t> line_;  // current line bytes

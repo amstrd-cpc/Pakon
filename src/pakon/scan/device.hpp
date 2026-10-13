@@ -121,6 +121,11 @@ public:
     // Read the lamp status registers without an event (warm-up check).
     Result<ServiceEvent> read_lamp_status();
 
+    // Read the DX record (PICL 0x90, read-only) without an event and
+    // return its film-sensor flags (& 0x30): the run-out after a row cap
+    // polls film presence while no image is acquired.
+    Result<std::uint8_t> read_dx_flags();
+
     // The guaranteed stop. Idempotent: the second call returns the first
     // report without sending anything.
     const TeardownReport& teardown();

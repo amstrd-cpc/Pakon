@@ -180,6 +180,18 @@ VoidResult ScanDevice::motor_rate(std::uint16_t rate) {
 VoidResult ScanDevice::motor_go() { return send(ps::motor_go(addresses_.motor)); }
 VoidResult ScanDevice::motor_stop() { return send(ps::motor_stop(addresses_.motor)); }
 
+Result<std::uint8_t> ScanDevice::read_dx_flags() {
+    auto dx = read(ps::read_dx_records(addresses_.light));
+    if (!dx) {
+        return dx.error();
+    }
+    if (dx->payload.size() < 4) {
+        return failure<std::uint8_t>(ErrorKind::ppb_bad_status,
+                                     std::format("DX record of {} bytes", dx->payload.size()));
+    }
+    return static_cast<std::uint8_t>(dx->payload[3] & 0x30);
+}
+
 Result<ServiceEvent> ScanDevice::read_lamp_status() {
     ServiceEvent ev;
     auto flags = read(ps::read_lamp_flags(addresses_.light));

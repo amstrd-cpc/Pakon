@@ -120,6 +120,7 @@ struct Outcome {
     bool acquiring{true};
     bool lamp{true};
     bool motor{true};
+    std::uint64_t travel{0}; // film transport at the end, line periods
 };
 
 Outcome run(sim::SimConfig scfg, scan::RunnerConfig rcfg, stream::StreamConfig strcfg = {},
@@ -158,6 +159,7 @@ Outcome run(sim::SimConfig scfg, scan::RunnerConfig rcfg, stream::StreamConfig s
     o.acquiring = device.acquiring();
     o.lamp = device.lamp_lit();
     o.motor = device.motor_running();
+    o.travel = device.travel_lines();
     return o;
 }
 
@@ -395,8 +397,12 @@ PAKON_TEST(late_film_is_still_found) {
     auto o = run(scfg, fast_runner({scan::Base::b4, false}, scan::ScanKind::film));
     EXPECT(o.ok);
     EXPECT(o.result.film_end == scan::FilmEnd::film_passed);
+    // The film travels between motor go and acquire on without being
+    // imaged (OEM on this unit: go 71.171, acquire 71.455 [CAP 17373
+    // oem-base4.jsonl]), so the edge shows up before line 2500; the
+    // simulator runs PAKON_SIM_SPEED times real time.
     if (o.result.film_start_line) {
-        EXPECT(*o.result.film_start_line > 2400);
+        EXPECT(*o.result.film_start_line > 2000);
     }
     expect_teardown_exactly_once(o);
     expect_safe_end(o);
@@ -487,6 +493,55 @@ PAKON_TEST(a_row_cap_that_cannot_fit_in_memory_fails_before_the_motor_moves) {
         const auto& f = o.frames[i];
         EXPECT(!(f.size() == 5 && f[2] == 0x44 && f[4] == 0xA0));
     }
+    expect_teardown_exactly_once(o);
+    expect_safe_end(o);
+}
+
+// A row cap shorter than the film ends the image window but not the
+// transport: the motor runs on until the DX sensor reads clear, so no
+// film is left in the path (a full roll stuck at the cap, 2026-10-13).
+PAKON_TEST(a_row_cap_mid_film_runs_the_film_out_before_the_teardown) {
+    auto scfg = fast_sim();
+    // A 300-line leader like the other film tests: the detector takes its
+    // open-gate reference there.
+    scfg.film = sim::FilmModel{300, 3000};
+    auto rcfg = fast_runner({scan::Base::b4, false}, scan::ScanKind::film);
+    rcfg.film_row_budget = 900;
+    rcfg.run_out_clear = 300ms;
+    rcfg.run_out_limit = 30s;
+    auto o = run(scfg, rcfg);
+    EXPECT(o.ok);
+    if (!o.ok) {
+        std::fprintf(stderr, "  %s\n", o.error.c_str());
+    }
+    EXPECT(o.result.film_end == scan::FilmEnd::row_budget);
+    EXPECT_EQ(o.result.film.rows(), 900u);
+    if (o.result.film_end != scan::FilmEnd::row_budget) {
+        std::fprintf(stderr, "  film end %s, film lines %zd..%zd, travel %llu\n",
+                     std::string(scan::to_string(o.result.film_end)).c_str(),
+                     o.result.film_start_line ? static_cast<std::ptrdiff_t>(*o.result.film_start_line) : -1,
+                     o.result.film_end_line ? static_cast<std::ptrdiff_t>(*o.result.film_end_line) : -1,
+                     static_cast<unsigned long long>(o.travel));
+    }
+    EXPECT(o.result.run_out.ran);
+    EXPECT(o.result.run_out.cleared);
+    EXPECT(o.travel >= 3300u); // the tail passed before the motor stopped
+    expect_teardown_exactly_once(o);
+    expect_safe_end(o);
+}
+
+PAKON_TEST(a_run_out_that_never_clears_stops_at_its_limit) {
+    auto scfg = fast_sim();
+    scfg.film = sim::FilmModel{300, 10'000'000}; // film never ends
+    auto rcfg = fast_runner({scan::Base::b4, false}, scan::ScanKind::film);
+    rcfg.film_row_budget = 900;
+    rcfg.run_out_clear = 300ms;
+    rcfg.run_out_limit = 800ms;
+    auto o = run(scfg, rcfg);
+    EXPECT(o.ok);
+    EXPECT(o.result.run_out.ran);
+    EXPECT(!o.result.run_out.cleared);
+    EXPECT(o.result.run_out.seconds >= 0.7 && o.result.run_out.seconds < 3.0);
     expect_teardown_exactly_once(o);
     expect_safe_end(o);
 }
