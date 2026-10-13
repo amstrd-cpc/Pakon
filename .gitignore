@@ -36,8 +36,10 @@ __pycache__/
 
 # Hardware session data: stays on the scanner PC. Raw USB captures carry
 # image data and EEPROM payloads (docs/HARDWARE_RUNBOOK.md §9); the EEPROM
-# dump is the unit's factory calibration. The converted .jsonl files and
-# diff.txt are the shareable artifacts.
+# dump is the unit's factory calibration. Converted sessions and diffs
+# are kept local too; commits cite them as [CAP 17373 <file> <t>].
+/*.jsonl
+/diff*.txt
 *.pcap
 *.pcapng
 eeprom.bin
