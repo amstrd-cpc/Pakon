@@ -203,6 +203,23 @@ void dump_images(DWORD seq, const char* name, const DWORD* a, DWORD phase) {
         }
         return;
     }
+    // Every scene image Ansel analyses (the roll analysis needs all of
+    // them to replay exactly) and the preview-size scale steps.
+    if (lstrcmpA(name, "PIAnselAddScene") == 0) {
+        if (phase == 0 && !IsBadReadPtr(reinterpret_cast<const void*>(a[2]), 16)) {
+            const DWORD* s = reinterpret_cast<const DWORD*>(a[2]);
+            dump_full(seq, name, "scene", s[0], s[2] * s[3] * 3 * 2, s[2], s[3], "u16 planar");
+        }
+        return;
+    }
+    if (lstrcmpA(name, "PIScaleAndRotatePlanar") == 0 && a[2] < 1000) {
+        if (phase == 0) {
+            dump_full(seq, name, "in", a[0], a[2] * a[3] * a[6] * 2, a[2], a[3], "u16 planar");
+        } else {
+            dump_full(seq, name, "out", a[0], a[4] * a[5] * a[6] * 2, a[4], a[5], "u16 planar");
+        }
+        return;
+    }
     if (g_full_seen == 0 || g_full_seen > kFullFrames) {
         return;
     }
