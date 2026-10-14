@@ -5,6 +5,11 @@
 // PakonIMAu.dll's ColNeg + Ansel pipeline, OEM_RE §13 — stage 2).
 //
 // Per pixel and channel c (R, G, B):
+//   alignment: the CCD is tri-linear — its R, G, B rows sit a fixed film
+//        distance apart, ~0.00249 of a frame pitch: R must be taken s
+//        lines earlier and B s lines later than G, s = round(0.00249 x
+//        pitch). Measured by gradient matching: Base 4 s = 4 (roll1,
+//        two frames), Base 16 IR s = 8 (film16ir1); 2026-10-14;
 //   t  = (raw - dark) / (white - dark) x on_cal / on_film
 //        flat field with the Corrections references; the white was
 //        measured at the calibration on-time, the film lit at the boosted
@@ -12,10 +17,14 @@
 //   t' = t / base_c        base = orange-mask transmission, measured on
 //                          the bare-base gap lines between the frames;
 //   D  = -log10(t')        density above base;
-//   x  = (D - Dlo_c) / (Dhi_c - Dlo_c), clamped to [0, 1]
-//        Dlo/Dhi = the 0.1 / 99.9 % density percentiles over every
-//        picture of the window: one black / white point per channel for
-//        the whole roll, which also balances the channels;
+//   x  = (D - Dmed_c) / S + m
+//        ONE slope S for all channels (the mean 0.1..99.9 % density span
+//        of the window's pictures; dye-layer contrasts are alike, a
+//        per-channel stretch skewed the colours), per-channel offsets
+//        that align the channels' median densities (grey world over the
+//        whole window), m = the mean (median - 0.1 %) position;
+//   x += e_frame           per-frame exposure: the frame's 99.5 % x of
+//                          its brightest channel goes to 1 (limited);
 //   y  = (10^(R (x - 1)) - 10^-R) / (1 - 10^-R)   scene-linear, R decades;
 //   out = sRGB-encoded y, 16 bit.
 // The IR lane is not used here (Digital ICE is a later stage).
@@ -34,14 +43,25 @@ struct PositiveOptions {
     double range_decades{2.2};
     double low_percentile{0.001};
     double high_percentile{0.999};
+    bool per_frame_exposure{true};
+    double max_exposure_shift{0.35}; // in x units, either way
 };
+
+// Tri-linear CCD row spacing as a fraction of the frame pitch (above).
+inline constexpr double kRowSpacingPerPitch = 0.00249;
 
 struct PositiveParams {
     std::array<double, 3> base{};    // base transmission per channel
-    std::array<double, 3> d_low{};   // density mapped to black
-    std::array<double, 3> d_high{};  // density mapped to white
+    std::array<double, 3> d_low{};   // 0.1 % density per channel
+    std::array<double, 3> d_mid{};   // median density per channel
+    std::array<double, 3> d_high{};  // 99.9 % density per channel
+    double span{1.0};                // common slope S
+    double mid_x{0.5};               // m
+    int line_shift{0};               // s: R from line - s, B from line + s
     std::size_t base_lines{0};       // gap lines the base came from
     double range_decades{2.2};
+    bool per_frame_exposure{true};
+    double max_exposure_shift{0.35};
 };
 
 // Roll-wide parameters from the gaps (base) and the pictures (densities).

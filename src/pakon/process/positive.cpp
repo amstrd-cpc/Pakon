@@ -143,10 +143,22 @@ Result<PositiveParams> measure_positive(PakrawReader& raw, const ScanInfo& info,
             }
         }
     }
+    double span = 0;
     for (std::size_t c = 0; c < 3; ++c) {
         pp.d_low[c] = percentile(hist[c], opt.low_percentile);
+        pp.d_mid[c] = percentile(hist[c], 0.5);
         pp.d_high[c] = std::max(pp.d_low[c] + 0.05, percentile(hist[c], opt.high_percentile));
+        span += pp.d_high[c] - pp.d_low[c];
     }
+    pp.span = span / 3.0;
+    double mid = 0;
+    for (std::size_t c = 0; c < 3; ++c) {
+        mid += (pp.d_mid[c] - pp.d_low[c]) / pp.span;
+    }
+    pp.mid_x = mid / 3.0;
+    pp.line_shift = static_cast<int>(std::lround(kRowSpacingPerPitch * split.pitch));
+    pp.per_frame_exposure = opt.per_frame_exposure;
+    pp.max_exposure_shift = opt.max_exposure_shift;
     return pp;
 }
 
@@ -159,19 +171,56 @@ Result<std::vector<std::uint16_t>> develop_frame(PakrawReader& raw, const ScanIn
     const FlatField ff(info);
     const std::size_t w = f.last - f.first;
     const std::size_t h = info.pixels;
-    const double floor = std::pow(10.0, -pp.range_decades);
-    std::vector<std::uint16_t> out(w * h * 3);
-    std::vector<std::uint16_t> row(raw.samples_per_row());
-    for (std::size_t r = 0; r < w; ++r) {
-        if (auto rr = raw.read_row(f.first + r, row); !rr) {
+    const std::size_t spr = raw.samples_per_row();
+    const auto s = static_cast<std::size_t>(std::max(0, pp.line_shift));
+
+    // The frame plus s lines either side (R and B come from neighbours).
+    const std::size_t lo = f.first >= s ? f.first - s : 0;
+    const std::size_t hi = std::min<std::size_t>(static_cast<std::size_t>(raw.rows()), f.last + s);
+    std::vector<std::uint16_t> rows((hi - lo) * spr);
+    for (std::size_t r = lo; r < hi; ++r) {
+        if (auto rr = raw.read_row(r, std::span<std::uint16_t>(rows).subspan((r - lo) * spr, spr)); !rr) {
             return rr.error();
         }
+    }
+    const auto sample = [&](std::size_t line, std::ptrdiff_t shift, std::size_t p, std::size_t c) {
+        const auto want = static_cast<std::ptrdiff_t>(line) + shift;
+        const auto clamped = std::clamp<std::ptrdiff_t>(want, static_cast<std::ptrdiff_t>(lo),
+                                                        static_cast<std::ptrdiff_t>(hi) - 1);
+        return rows[static_cast<std::size_t>(clamped - static_cast<std::ptrdiff_t>(lo)) * spr + 3 * p + c];
+    };
+    const std::array<std::ptrdiff_t, 3> shift{-static_cast<std::ptrdiff_t>(s), 0,
+                                              static_cast<std::ptrdiff_t>(s)};
+    const auto x_of = [&](std::size_t line, std::size_t p, std::size_t c) {
+        const double d = -std::log10(ff.t(c, p, sample(line, shift[c], p, c)) / pp.base[c]);
+        return (d - pp.d_mid[c]) / pp.span + pp.mid_x;
+    };
+
+    // Per-frame exposure: the 99.5 % of the brightest channel to 1.
+    double exposure = 0;
+    if (pp.per_frame_exposure) {
+        std::vector<double> xs;
+        for (std::size_t r = f.first; r < f.last; r += 4) {
+            for (std::size_t p = h / 20; p < h - h / 20; p += 4) {
+                xs.push_back(std::max({x_of(r, p, 0), x_of(r, p, 1), x_of(r, p, 2)}));
+            }
+        }
+        if (!xs.empty()) {
+            const auto k = static_cast<std::ptrdiff_t>(0.995 * static_cast<double>(xs.size() - 1));
+            std::nth_element(xs.begin(), xs.begin() + k, xs.end());
+            exposure = std::clamp(1.0 - xs[static_cast<std::size_t>(k)], -pp.max_exposure_shift,
+                                  pp.max_exposure_shift);
+        }
+    }
+
+    const double floor = std::pow(10.0, -pp.range_decades);
+    std::vector<std::uint16_t> out(w * h * 3);
+    for (std::size_t r = 0; r < w; ++r) {
         const std::size_t x_out = picture_col(r, w, feed);
         for (std::size_t p = 0; p < h; ++p) {
             const std::size_t y_out = picture_row(p, h, feed);
             for (std::size_t c = 0; c < 3; ++c) {
-                const double d = -std::log10(ff.t(c, p, row[3 * p + c]) / pp.base[c]);
-                const double x = std::clamp((d - pp.d_low[c]) / (pp.d_high[c] - pp.d_low[c]), 0.0, 1.0);
+                const double x = std::clamp(x_of(f.first + r, p, c) + exposure, 0.0, 1.0);
                 const double y = (std::pow(10.0, pp.range_decades * (x - 1.0)) - floor) / (1.0 - floor);
                 out[(y_out * w + x_out) * 3 + c] =
                     static_cast<std::uint16_t>(std::lround(srgb(y) * 65535.0));
