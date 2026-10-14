@@ -67,12 +67,30 @@ bool init_locked() {
     }
     g_log = open_out("PakonIMAu_proxy.log");
     g_bin = open_out("PakonIMAu_proxy.bin");
-    char path[MAX_PATH];
-    lstrcpyA(path, g_dir);
-    lstrcatA(path, "PakonIMAu_real.dll");
-    g_real = LoadLibraryA(path);
-    logf("=== proxy start, real %s %s (error %lu)\r\n", path, g_real ? "loaded" : "NOT LOADED",
-         g_real ? 0UL : GetLastError());
+    // The original, renamed. Windows Explorer hides extensions by default,
+    // so a rename may produce "PakonIMAu_real.dll.dll": accept both.
+    // LOAD_WITH_ALTERED_SEARCH_PATH: its own dependencies (KODAKCMS.dll,
+    // xerces-c_2_2_0.dll, ekjpegi.dll, MSVCR71.dll) are looked for in its
+    // directory first, whatever process loaded us (error 126 otherwise,
+    // first VM run 2026-10-14).
+    static const char* const kNames[] = {"PakonIMAu_real.dll", "PakonIMAu_real.dll.dll"};
+    logf("=== proxy start, dir %s\r\n", g_dir);
+    for (const char* name : kNames) {
+        char path[MAX_PATH];
+        lstrcpyA(path, g_dir);
+        lstrcatA(path, name);
+        const DWORD attr = GetFileAttributesA(path);
+        if (attr == INVALID_FILE_ATTRIBUTES) {
+            logf("    %s: not there\r\n", name);
+            continue;
+        }
+        g_real = LoadLibraryExA(path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+        logf("    %s: %s (error %lu)\r\n", name, g_real ? "loaded" : "NOT LOADED",
+             g_real ? 0UL : GetLastError());
+        if (g_real) {
+            break;
+        }
+    }
     return g_real != nullptr;
 }
 
