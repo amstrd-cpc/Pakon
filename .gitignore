@@ -51,3 +51,6 @@ eeprom.bin
 *.scan-stats.txt
 *.console.txt
 /*.tiff
+
+# OEM proxy build output (tools/oem_proxy/build.bat)
+/tools/oem_proxy/out/

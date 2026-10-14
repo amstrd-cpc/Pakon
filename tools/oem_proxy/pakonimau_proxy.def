@@ -1,0 +1,21 @@
+LIBRARY PakonIMAu
+EXPORTS
+    PIBegin = proxy_PIBegin
+    PIEnd = proxy_PIEnd
+    PISaveFilePlanar_8 = proxy_PISaveFilePlanar_8
+    PIFileSpecsPlanar_8 = proxy_PIFileSpecsPlanar_8
+    PIFileOpenPlanar = proxy_PIFileOpenPlanar
+    PIColorAdjustPlanar = proxy_PIColorAdjustPlanar
+    PIRotatePlanar = proxy_PIRotatePlanar
+    PIScaleAndRotatePlanar = proxy_PIScaleAndRotatePlanar
+    PIColorCorrectColNegPlanarScan = proxy_PIColorCorrectColNegPlanarScan
+    PIColorCorrectColNegPlanarSave = proxy_PIColorCorrectColNegPlanarSave
+    PIColorCorrectColRevPlanar = proxy_PIColorCorrectColRevPlanar
+    PIAnselStartNewRoll = proxy_PIAnselStartNewRoll
+    PIAnselAddScene = proxy_PIAnselAddScene
+    PIAnselEndRoll = proxy_PIAnselEndRoll
+    PIAnselAnalyzeRoll = proxy_PIAnselAnalyzeRoll
+    PIAnselAnalyzeScene = proxy_PIAnselAnalyzeScene
+    PIAnselColorSceneBalancePlanar = proxy_PIAnselColorSceneBalancePlanar
+    PIAnselDeleteRoll = proxy_PIAnselDeleteRoll
+    PIAnselDeleteScene = proxy_PIAnselDeleteScene
