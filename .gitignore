@@ -54,3 +54,4 @@ eeprom.bin
 
 # OEM proxy build output (tools/oem_proxy/build.bat)
 /tools/oem_proxy/out/
+/tools/oem_host/out/
