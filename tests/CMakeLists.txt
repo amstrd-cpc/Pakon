@@ -120,3 +120,10 @@ if(Python3_Interpreter_FOUND AND NOT CMAKE_CROSSCOMPILING)
     add_test(NAME session_tools
              COMMAND Python3::Interpreter -I ${CMAKE_SOURCE_DIR}/tools/tests/test_session_tools.py)
 endif()
+
+# Processing (offline, pakon_process): sidecar JSON, .pakraw reader,
+# frame separation on synthetic profiles.
+add_executable(process_test process/process_test.cpp)
+target_link_libraries(process_test PRIVATE pakon_process)
+target_include_directories(process_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME process COMMAND process_test)

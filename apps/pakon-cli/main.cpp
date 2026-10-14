@@ -27,6 +27,7 @@
 #include <string_view>
 #include <vector>
 
+#include "frames_cli.hpp"
 #include "scan_cli.hpp"
 #include "pakon/bootstrap/probe.hpp"
 #include "pakon/logging/logger.hpp"
@@ -70,6 +71,7 @@ void print_usage() {
         "  status     identify, then poll status registers (read-only)\n"
         "\n");
     pakon::cli::print_scan_usage(stdout);
+    pakon::cli::print_frames_usage(stdout);
     std::puts(
         "\n"
         "log levels: off, error, warn, info, debug, trace\n"
@@ -578,7 +580,7 @@ int main(int argc, char** argv) {
             return 0;
         } else if (command.empty()) {
             command = arg;
-        } else if (command == "scan" || command == "eeprom") {
+        } else if (command == "scan" || command == "eeprom" || command == "frames") {
             // Everything after `scan` belongs to the scan command's own
             // argument validation (scan_cli.cpp); it decides usage
             // errors before any device entry point can run.
@@ -625,6 +627,10 @@ int main(int argc, char** argv) {
         pakon::cli::ScanCliDeps deps;
         deps.open_session = &open_live_session;
         return pakon::cli::run_scan_command(scan_args, deps, stdout, stderr);
+    }
+    if (command == "frames") {
+        // Offline processing of scan outputs: no device entry point.
+        return pakon::cli::run_frames_command(scan_args, stdout, stderr);
     }
     if (command == "eeprom") {
         // Read-only: the allow-listed 0xA4 read-select and 0xA9 reads.

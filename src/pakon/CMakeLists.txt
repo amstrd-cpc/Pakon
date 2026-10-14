@@ -79,3 +79,14 @@ if(WIN32)
         COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC,Clang>:/FIinitguid.h>"
     )
 endif()
+
+# Processing library: pakon_process — offline work on scan outputs
+# (.pakraw + .scan.json): frame separation now, the image pipeline
+# later. Depends on errors/ and image/ only, never on scan/ or USB, so
+# processing stays out of the scan runner.
+add_library(pakon_process STATIC
+    process/json.cpp
+    process/pakraw.cpp
+    process/frames.cpp
+)
+target_link_libraries(pakon_process PUBLIC pakon_core)
