@@ -237,9 +237,151 @@ int cmd_replay(int argc, char** argv) {
     return 0;
 }
 
+// script <oem dir> <settings.bin> <script.txt>
+//   Several calls in one session, sharing named buffers (Ansel keeps roll
+//   and scene state between calls). One statement per line:
+//     buf <name> blob <file> [bytes]   file contents (padded to bytes)
+//     buf <name> zero <bytes>
+//     poke <name> <offset> <hex>       DWORD into a buffer
+//     pokeref <name> <offset> <name2>  address of name2 into a buffer
+//     call <export> <arg>...           up to 16 args: hex literal or @name
+//     save <name> <bytes> <file>
+//   Paths must not contain spaces (run from the data directory).
+int cmd_script(int argc, char** argv) {
+    if (argc != 5) {
+        std::fprintf(stderr, "usage: oem_host script <oem dir> <settings.bin> <script>\n");
+        return 2;
+    }
+    const std::wstring dir = widen(argv[2]);
+    auto settings = read_file(argv[3]);
+    Oem oem;
+    if (!load(dir, oem) || begin(oem, dir, settings) != 0) {
+        return 1;
+    }
+    using Fn16 = DWORD(__cdecl*)(DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD,
+                                 DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD);
+    struct Named {
+        std::string name;
+        std::vector<unsigned char> data;
+    };
+    std::vector<Named*> named;
+    const auto find = [&](const std::string& n) -> Named* {
+        for (auto* b : named) {
+            if (b->name == n) {
+                return b;
+            }
+        }
+        return nullptr;
+    };
+    FILE* f = std::fopen(argv[4], "r");
+    if (!f) {
+        std::fprintf(stderr, "cannot read %s\n", argv[4]);
+        return 1;
+    }
+    char line[2048];
+    int lineno = 0;
+    int rc = 0;
+    while (rc == 0 && std::fgets(line, sizeof line, f)) {
+        ++lineno;
+        std::vector<std::string> t;
+        for (char* p = std::strtok(line, " \t\r\n"); p; p = std::strtok(nullptr, " \t\r\n")) {
+            t.emplace_back(p);
+        }
+        if (t.empty() || t[0][0] == '#') {
+            continue;
+        }
+        const auto fail = [&](const char* why) {
+            std::fprintf(stderr, "line %d: %s\n", lineno, why);
+            rc = 1;
+        };
+        if (t[0] == "buf" && t.size() >= 4) {
+            auto* b = find(t[1]);
+            if (!b) {
+                b = new Named{t[1], {}};
+                named.push_back(b);
+            }
+            if (t[2] == "blob") {
+                b->data = read_file(t[3].c_str());
+                if (b->data.empty()) {
+                    fail("cannot read blob");
+                    continue;
+                }
+                if (t.size() >= 5 && b->data.size() < std::strtoul(t[4].c_str(), nullptr, 0)) {
+                    b->data.resize(std::strtoul(t[4].c_str(), nullptr, 0));
+                }
+            } else {
+                b->data.assign(std::strtoul(t[3].c_str(), nullptr, 0), 0);
+            }
+        } else if ((t[0] == "poke" || t[0] == "pokeref") && t.size() == 4) {
+            auto* b = find(t[1]);
+            const size_t off = std::strtoul(t[2].c_str(), nullptr, 0);
+            if (!b || off + 4 > b->data.size()) {
+                fail("bad poke");
+                continue;
+            }
+            DWORD v = 0;
+            if (t[0] == "poke") {
+                v = std::strtoul(t[3].c_str(), nullptr, 16);
+            } else if (auto* r = find(t[3])) {
+                v = reinterpret_cast<DWORD>(r->data.data());
+            } else {
+                fail("unknown buffer");
+                continue;
+            }
+            *reinterpret_cast<DWORD*>(b->data.data() + off) = v;
+        } else if (t[0] == "call" && t.size() >= 2) {
+            auto fn = reinterpret_cast<Fn16>(GetProcAddress(oem.dll, t[1].c_str()));
+            if (!fn) {
+                fail("unknown export");
+                continue;
+            }
+            DWORD a[16] = {};
+            for (size_t i = 2; i < t.size() && i - 2 < 16; ++i) {
+                if (t[i][0] == '@') {
+                    auto* b = find(t[i].substr(1));
+                    if (!b) {
+                        fail("unknown buffer");
+                        break;
+                    }
+                    a[i - 2] = reinterpret_cast<DWORD>(b->data.data());
+                } else {
+                    a[i - 2] = std::strtoul(t[i].c_str(), nullptr, 16);
+                }
+            }
+            if (rc) {
+                continue;
+            }
+            const DWORD t0 = GetTickCount();
+            const DWORD r = fn(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10],
+                               a[11], a[12], a[13], a[14], a[15]);
+            std::printf("%s -> %08lx (%lu ms)\n", t[1].c_str(), r, GetTickCount() - t0);
+        } else if (t[0] == "save" && t.size() == 4) {
+            auto* b = find(t[1]);
+            if (!b) {
+                fail("unknown buffer");
+                continue;
+            }
+            const size_t n = std::min<size_t>(std::strtoul(t[2].c_str(), nullptr, 0), b->data.size());
+            write_file(t[3].c_str(), b->data.data(), n);
+            std::printf("saved %s (%zu bytes)\n", t[3].c_str(), n);
+        } else {
+            fail("unknown statement");
+        }
+    }
+    std::fclose(f);
+    oem.end();
+    for (auto* b : named) {
+        delete b;
+    }
+    return rc;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc >= 2 && std::strcmp(argv[1], "script") == 0) {
+        return cmd_script(argc, argv);
+    }
     if (argc >= 2 && std::strcmp(argv[1], "coloradjust") == 0) {
         return cmd_coloradjust(argc, argv);
     }
