@@ -40,6 +40,9 @@ __pycache__/
 # are kept local too; commits cite them as [CAP 17373 <file> <t>].
 /*.jsonl
 /diff*.txt
+# pakon-cli frames output (frame TIFFs, positives, frames.json)
+*.frame[0-9]*.tiff
+*.frames.json
 *.pcap
 *.pcapng
 eeprom.bin
