@@ -42,8 +42,16 @@ Result<ScanInfo> scan_info_from_sidecar(const Json& s) {
     info.ir = film["ir"].boolean().value_or(false);
     const double shift = film["start"].number().value_or(0) - cal["start"].number().value_or(0);
     info.reference_shift = shift > 0 ? static_cast<std::size_t>(shift) : 0;
-    info.dark_green = numbers(s["corrections"]["dark"]["planes"][1]);
-    info.white_green = numbers(s["corrections"]["white"]["planes"][1]);
+    const auto& c = s["corrections"];
+    for (std::size_t ch = 0; ch < 3; ++ch) {
+        info.dark[ch] = numbers(c["dark"]["planes"][ch]);
+        info.white[ch] = numbers(c["white"]["planes"][ch]);
+        const char* key = ch == 0 ? "r" : ch == 1 ? "g" : "b";
+        info.calibration_on_time[ch] = c["on_time"][key].number().value_or(0);
+        info.film_on_time[ch] = c["film_on_time"][key].number().value_or(0);
+    }
+    info.dark_green = info.dark[1];
+    info.white_green = info.white[1];
     if (info.pixels == 0 || info.motor_rate <= 0 || info.line_period_ms <= 0 ||
         info.dark_green.size() < info.pixels + info.reference_shift ||
         info.white_green.size() < info.pixels + info.reference_shift) {

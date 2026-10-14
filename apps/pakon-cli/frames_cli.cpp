@@ -3,12 +3,14 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <optional>
 #include <sstream>
 
 #include "pakon/image/tiff.hpp"
 #include "pakon/process/frames.hpp"
 #include "pakon/process/json.hpp"
 #include "pakon/process/pakraw.hpp"
+#include "pakon/process/positive.hpp"
 
 namespace pakon::cli {
 
@@ -35,10 +37,11 @@ std::string frames_json(const process::FrameSplit& s, const std::string& raw) {
     return j + "\n]}\n";
 }
 
-// One frame, rows [first, last): RGB transposed so width = travel, plus
-// the IR lane when present. Samples as scanned (linear negative).
+// One frame, rows [first, last): RGB transposed so width = travel and
+// oriented for viewing (process::picture_row / picture_col), plus the
+// IR lane when present. Samples as scanned (linear negative).
 VoidResult write_frame(process::PakrawReader& raw, const process::ScanInfo& info,
-                       const process::Frame& f, const std::string& rgb_path,
+                       const process::Frame& f, process::Feed feed, const std::string& rgb_path,
                        const std::string& ir_path) {
     const std::size_t w = f.last - f.first;
     const std::size_t h = info.pixels;
@@ -49,12 +52,14 @@ VoidResult write_frame(process::PakrawReader& raw, const process::ScanInfo& info
         if (auto rr = raw.read_row(f.first + r, row); !rr) {
             return rr;
         }
+        const std::size_t x = process::picture_col(r, w, feed);
         for (std::size_t p = 0; p < h; ++p) {
+            const std::size_t y = process::picture_row(p, h, feed);
             for (std::size_t c = 0; c < 3; ++c) {
-                rgb[(p * w + r) * 3 + c] = row[3 * p + c];
+                rgb[(y * w + x) * 3 + c] = row[3 * p + c];
             }
             if (info.ir) {
-                ir[p * w + r] = row[3 * h + p];
+                ir[y * w + x] = row[3 * h + p];
             }
         }
     }
@@ -74,22 +79,32 @@ VoidResult write_frame(process::PakrawReader& raw, const process::ScanInfo& info
 
 void print_frames_usage(std::FILE* out) {
     std::fprintf(out,
-                 "  frames <prefix> [--out-dir DIR] [--detect-only]\n"
+                 "  frames <prefix> [--out-dir DIR] [--detect-only] [--positive] [--tail-first]\n"
                  "             split a scanned film window into its pictures (offline:\n"
                  "             reads <prefix>.film.pakraw + <prefix>.scan.json, opens no\n"
                  "             device); writes <prefix>.frameNN.tiff (linear 16-bit raw\n"
-                 "             negative), .frameNN.ir.tiff in IR modes, <prefix>.frames.json\n");
+                 "             negative), .frameNN.ir.tiff in IR modes, <prefix>.frames.json;\n"
+                 "             --positive also writes .frameNN.pos.tiff (16-bit sRGB positive:\n"
+                 "             flat field, film base removed, one density stretch per roll);\n"
+                 "             --tail-first when the film went in tail first (pictures upside\n"
+                 "             down otherwise; the default is the normal head-first load)\n");
 }
 
 int run_frames_command(const std::vector<std::string>& args, std::FILE* out, std::FILE* err) {
     std::string prefix;
     std::string out_dir;
     bool detect_only = false;
+    bool positive = false;
+    process::Feed feed = process::Feed::head_first;
     for (std::size_t i = 0; i < args.size(); ++i) {
         if (args[i] == "--out-dir" && i + 1 < args.size()) {
             out_dir = args[++i];
         } else if (args[i] == "--detect-only") {
             detect_only = true;
+        } else if (args[i] == "--positive") {
+            positive = true;
+        } else if (args[i] == "--tail-first") {
+            feed = process::Feed::tail_first;
         } else if (prefix.empty() && !args[i].starts_with("--")) {
             prefix = args[i];
         } else {
@@ -171,6 +186,20 @@ int run_frames_command(const std::vector<std::string>& args, std::FILE* out, std
     if (detect_only) {
         return code;
     }
+    std::optional<process::PositiveParams> pos;
+    if (positive) {
+        auto pp = process::measure_positive(**raw, *info, split);
+        if (!pp) {
+            std::fprintf(err, "error: frames: positive: %s\n", pp.error().message.c_str());
+            return 1;
+        }
+        pos = *pp;
+        std::fprintf(out,
+                     "positive: base R %.4f G %.4f B %.4f (%zu gap lines); density black..white "
+                     "R %.3f..%.3f G %.3f..%.3f B %.3f..%.3f\n",
+                     pos->base[0], pos->base[1], pos->base[2], pos->base_lines, pos->d_low[0],
+                     pos->d_high[0], pos->d_low[1], pos->d_high[1], pos->d_low[2], pos->d_high[2]);
+    }
     std::size_t n = 0;
     for (std::size_t i = 0; i < split.frames.size(); ++i) {
         if (split.frames[i].kind != process::FrameKind::picture) {
@@ -179,12 +208,32 @@ int run_frames_command(const std::vector<std::string>& args, std::FILE* out, std
         ++n;
         const auto rgb = std::format("{}.frame{:02}.tiff", stem, n);
         const auto ir = std::format("{}.frame{:02}.ir.tiff", stem, n);
-        if (auto w = write_frame(**raw, *info, split.frames[i], rgb, ir); !w) {
+        if (auto w = write_frame(**raw, *info, split.frames[i], feed, rgb, ir); !w) {
             std::fprintf(err, "error: frames: %s: %s\n", rgb.c_str(), w.error().message.c_str());
             code = 1;
             continue;
         }
         std::fprintf(out, "written: %s%s\n", rgb.c_str(), info->ir ? " (+ .ir.tiff)" : "");
+        if (pos) {
+            const auto pos_path = std::format("{}.frame{:02}.pos.tiff", stem, n);
+            const auto& f = split.frames[i];
+            auto px = process::develop_frame(**raw, *info, *pos, f, feed);
+            if (!px) {
+                std::fprintf(err, "error: frames: %s: %s\n", pos_path.c_str(),
+                             px.error().message.c_str());
+                code = 1;
+                continue;
+            }
+            if (auto t = image::write_tiff16(pos_path, static_cast<std::uint32_t>(f.last - f.first),
+                                             static_cast<std::uint32_t>(info->pixels), 3, *px);
+                !t) {
+                std::fprintf(err, "error: frames: %s: %s\n", pos_path.c_str(),
+                             t.error().message.c_str());
+                code = 1;
+                continue;
+            }
+            std::fprintf(out, "written: %s\n", pos_path.c_str());
+        }
     }
     return code;
 }

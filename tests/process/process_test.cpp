@@ -13,6 +13,7 @@
 #include "pakon/process/frames.hpp"
 #include "pakon/process/json.hpp"
 #include "pakon/process/pakraw.hpp"
+#include "pakon/process/positive.hpp"
 #include "support/test_harness.hpp"
 
 namespace {
@@ -174,6 +175,81 @@ PAKON_TEST(fogged_leader_and_blank_tail_are_not_pictures) {
         if (f.first >= 300 + 5 * 1600) {
             EXPECT(f.kind != FrameKind::picture);
         }
+    }
+}
+
+// Positive on a tiny synthetic window: flat field, base from the gap,
+// denser negative -> brighter positive, base -> black, and the vertical
+// flip of the CCD pixel axis.
+PAKON_TEST(positive_inverts_densities_above_the_base_and_orients_by_feed) {
+    constexpr std::size_t px = 10;
+    const auto path = temp_path("pakon_process_positive.pakraw");
+    {
+        auto w = image::StreamRawWriter::open(path, 3 * px, {});
+        EXPECT(w.has_value());
+        if (!w) {
+            return;
+        }
+        std::vector<std::uint16_t> row(3 * px);
+        // Lines 0..99: bare base, t = 0.4 in every channel.
+        for (int r = 0; r < 100; ++r) {
+            std::fill(row.begin(), row.end(), static_cast<std::uint16_t>(0.4 * 60000));
+            EXPECT((*w)->append(row).has_value());
+        }
+        // Lines 100..199: picture, density rising with the pixel index.
+        for (int r = 0; r < 100; ++r) {
+            for (std::size_t p = 0; p < px; ++p) {
+                const double t = 0.4 * std::pow(10.0, -0.1 * static_cast<double>(p));
+                for (std::size_t c = 0; c < 3; ++c) {
+                    row[3 * p + c] = static_cast<std::uint16_t>(t * 60000);
+                }
+            }
+            EXPECT((*w)->append(row).has_value());
+        }
+        EXPECT((*w)->finish().has_value());
+    }
+    auto raw = PakrawReader::open(path);
+    EXPECT(raw.has_value());
+    if (!raw) {
+        return;
+    }
+    ScanInfo info = info_for_pitch(100, 0, std::nullopt);
+    info.pixels = px;
+    for (std::size_t c = 0; c < 3; ++c) {
+        info.dark[c].assign(px, 0.0);
+        info.white[c].assign(px, 60000.0);
+        info.calibration_on_time[c] = 0.5;
+        info.film_on_time[c] = 0.5;
+    }
+    FrameSplit split;
+    split.gaps.push_back({0, 100});
+    split.frames.push_back({100, 200, true, true, FrameKind::picture});
+    auto pp = measure_positive(**raw, info, split, {});
+    EXPECT(pp.has_value());
+    if (!pp) {
+        return;
+    }
+    EXPECT(std::abs(pp->base[1] - 0.4) < 0.01);
+    auto img = develop_frame(**raw, info, *pp, split.frames[0], Feed::tail_first);
+    EXPECT(img.has_value());
+    if (!img) {
+        return;
+    }
+    const std::size_t w = 100;
+    // Output row y holds CCD pixel px-1-y: the densest pixel (9) is the
+    // brightest and lands in row 0; the thinnest (0, at base) is black.
+    const auto at = [&](std::size_t y) { return (*img)[(y * w + 50) * 3 + 1]; };
+    EXPECT(at(0) > 60000);
+    EXPECT(at(px - 1) < 1000);
+    for (std::size_t y = 1; y < px; ++y) {
+        EXPECT(at(y) <= at(y - 1));
+    }
+    // Head first: the pixel axis as is, so the densest pixel is the last row.
+    auto head = develop_frame(**raw, info, *pp, split.frames[0], Feed::head_first);
+    EXPECT(head.has_value());
+    if (head) {
+        EXPECT((*head)[((px - 1) * w + 50) * 3 + 1] > 60000);
+        EXPECT((*head)[(0 * w + 50) * 3 + 1] < 1000);
     }
 }
 

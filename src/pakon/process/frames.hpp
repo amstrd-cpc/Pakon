@@ -25,6 +25,7 @@
 // Measured on this unit's scans of 2026-10-10/13; [INFERRED design] —
 // the OEM's framing code (TLB processing thread) is not recovered.
 
+#include <array>
 #include <cstddef>
 #include <optional>
 #include <span>
@@ -52,6 +53,12 @@ struct ScanInfo {
     std::size_t reference_shift{0};        // film pixel p = calibration pixel p + shift
     std::vector<double> dark_green;        // calibration-window references
     std::vector<double> white_green;
+    // All three channels (R, G, B), calibration window, and the LED
+    // on-times the white was measured at vs the film was scanned at.
+    std::array<std::vector<double>, 3> dark;
+    std::array<std::vector<double>, 3> white;
+    std::array<double, 3> calibration_on_time{};
+    std::array<double, 3> film_on_time{};
 };
 Result<ScanInfo> scan_info_from_sidecar(const Json& sidecar);
 

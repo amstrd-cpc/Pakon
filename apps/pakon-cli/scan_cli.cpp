@@ -280,7 +280,9 @@ VoidResult write_preview(const std::string& tiff_path, const std::string& raw_pa
         for (std::size_t p = 0; p < pixels; p += step) {
             for (std::size_t c = 0; c < 3; ++c) {
                 const std::size_t s = 2 * (3 * p + c);
-                rgb[((p / step) * w + r / step) * 3 + c] =
+                // Oriented like the frame TIFFs for the normal head-first
+                // load: travel axis reversed (process/positive.hpp, Feed).
+                rgb[((p / step) * w + (w - 1 - r / step)) * 3 + c] =
                     static_cast<std::uint16_t>(row[s] | (row[s + 1] << 8));
             }
         }

@@ -88,5 +88,6 @@ add_library(pakon_process STATIC
     process/json.cpp
     process/pakraw.cpp
     process/frames.cpp
+    process/positive.cpp
 )
 target_link_libraries(pakon_process PUBLIC pakon_core)
