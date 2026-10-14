@@ -795,10 +795,13 @@ void SimDevice::producer_loop() {
         const double line_bytes = std::max<double>(static_cast<double>(line_samples_locked()) * 2.0, 2.0);
         const double rate = line_bytes / (line_time_us_locked() * 1e-6) * config_.speed;
         budget_ += std::chrono::duration<double>(now - last_tick_).count() * rate;
-        // At most 20 ms of backlog: when the host machine cannot generate
+        // At most 100 ms of backlog: when the host machine cannot generate
         // lines at the configured rate the simulated device just runs
-        // slower (never a burst that holds the lock for long).
-        budget_ = std::min(budget_, rate * 0.02);
+        // slower; the 64 KiB-per-wake-up cap below keeps every burst short.
+        // 20 ms was too little on Windows: a scheduling stall of a few
+        // tens of ms slowed the device itself, and the real-rate check in
+        // f1 read 1.37-1.48 ms per 0.9 ms line (scanner PC, 2026-10-13).
+        budget_ = std::min(budget_, rate * 0.1);
         last_tick_ = now;
         std::size_t emitted = 0;
         while (budget_ >= 512.0 && (control_ & 1) != 0 && emitted < 64 * 1024) {
