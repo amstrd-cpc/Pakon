@@ -73,24 +73,47 @@ bool init_locked() {
     // xerces-c_2_2_0.dll, ekjpegi.dll, MSVCR71.dll) are looked for in its
     // directory first, whatever process loaded us (error 126 otherwise,
     // first VM run 2026-10-14).
-    static const char* const kNames[] = {"PakonIMAu_real.dll", "PakonIMAu_real.dll.dll"};
+    // Any "PakonIMAu_real*" file is taken (a hidden-extension rename can
+    // give "PakonIMAu_real.dll.dll"); every Pakon* file of the directory is
+    // logged with its size so a missing original shows up (2nd VM run,
+    // 2026-10-14: neither expected name existed).
     logf("=== proxy start, dir %s\r\n", g_dir);
-    for (const char* name : kNames) {
-        char path[MAX_PATH];
-        lstrcpyA(path, g_dir);
-        lstrcatA(path, name);
-        const DWORD attr = GetFileAttributesA(path);
-        if (attr == INVALID_FILE_ATTRIBUTES) {
-            logf("    %s: not there\r\n", name);
-            continue;
-        }
-        g_real = LoadLibraryExA(path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
-        logf("    %s: %s (error %lu)\r\n", name, g_real ? "loaded" : "NOT LOADED",
-             g_real ? 0UL : GetLastError());
-        if (g_real) {
-            break;
-        }
+    char pattern[MAX_PATH];
+    lstrcpyA(pattern, g_dir);
+    lstrcatA(pattern, "Pakon*");
+    WIN32_FIND_DATAA fd;
+    HANDLE find = FindFirstFileA(pattern, &fd);
+    char candidate[MAX_PATH];
+    candidate[0] = 0;
+    if (find != INVALID_HANDLE_VALUE) {
+        do {
+            logf("    file %s (%lu bytes)\r\n", fd.cFileName, fd.nFileSizeLow);
+            char lower[MAX_PATH];
+            lstrcpyA(lower, fd.cFileName);
+            CharLowerA(lower);
+            const char* want = "pakonimau_real";
+            bool match = true;
+            for (int i = 0; want[i]; ++i) {
+                if (lower[i] != want[i]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match && candidate[0] == 0) {
+                lstrcpyA(candidate, g_dir);
+                lstrcatA(candidate, fd.cFileName);
+            }
+        } while (FindNextFileA(find, &fd));
+        FindClose(find);
     }
+    if (candidate[0] == 0) {
+        logf("    no PakonIMAu_real* file: rename the original PakonIMAu.dll to "
+             "PakonIMAu_real.dll\r\n");
+        return false;
+    }
+    g_real = LoadLibraryExA(candidate, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+    logf("    %s: %s (error %lu)\r\n", candidate, g_real ? "loaded" : "NOT LOADED",
+         g_real ? 0UL : GetLastError());
     return g_real != nullptr;
 }
 
