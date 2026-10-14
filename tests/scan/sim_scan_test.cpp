@@ -234,6 +234,19 @@ PAKON_TEST(f1_no_line_is_lost_while_the_window_streams) {
     EXPECT_EQ(o.result.film.geometry.samples_per_row, 3000u);
     // Real F-135+ Base-4 line period: 1875 × 0.48 µs = 0.9 ms.
     EXPECT(o.result.line_period_ms > 0.7 && o.result.line_period_ms < 1.3);
+    if (!(o.result.line_period_ms > 0.7 && o.result.line_period_ms < 1.3)) {
+        std::fprintf(stderr, "  line period %.3f ms, rows %zu, lost %llu\n",
+                     o.result.line_period_ms, o.result.film.rows(),
+                     static_cast<unsigned long long>(o.lost));
+        for (const auto& p : o.result.phases) {
+            std::fprintf(stderr, "  phase %s %.3f s\n", p.name.c_str(), p.seconds);
+        }
+        std::fprintf(stderr, "  gains %u %u %u, duties %.3f %.3f %.3f, film %.3f %.3f %.3f\n",
+                     o.result.corrections.gains[0], o.result.corrections.gains[1],
+                     o.result.corrections.gains[2], o.result.corrections.duties.r,
+                     o.result.corrections.duties.g, o.result.corrections.duties.b,
+                     o.result.film_duties.r, o.result.film_duties.g, o.result.film_duties.b);
+    }
     expect_teardown_exactly_once(o);
     expect_safe_end(o);
 }
@@ -516,6 +529,33 @@ PAKON_TEST(a_weak_channel_raises_current_and_gain_not_its_on_time) {
     EXPECT(c.duties.g <= scan::kServoStartDuty[1] + 1e-9);
     EXPECT(c.duties.b <= scan::kServoStartDuty[2] + 1e-9);
     EXPECT(c.duties.g * scan::kFilmBoost[1] <= 1.0 + 1e-9);
+    expect_teardown_exactly_once(o);
+    expect_safe_end(o);
+}
+
+// With a sink the film rows bypass memory (the CLI streams them to the
+// .pakraw): every row reaches the sink, none stays in the result.
+PAKON_TEST(film_rows_stream_to_the_sink_instead_of_memory) {
+    struct CountingSink final : scan::IRowSink {
+        std::size_t rows{0};
+        std::size_t width{0};
+        VoidResult append(std::span<const std::uint16_t> row) override {
+            ++rows;
+            width = row.size();
+            return {};
+        }
+    } sink;
+    auto rcfg = fast_runner({scan::Base::b4, false}, scan::ScanKind::film);
+    rcfg.film_sink = &sink;
+    auto scfg = fast_sim();
+    scfg.film = sim::FilmModel{300, 1500};
+    auto o = run(scfg, rcfg);
+    EXPECT(o.ok);
+    EXPECT(o.result.film_end == scan::FilmEnd::film_passed);
+    EXPECT(sink.rows > 1500);
+    EXPECT_EQ(o.result.film_rows, sink.rows);
+    EXPECT_EQ(sink.width, 3000u);
+    EXPECT(o.result.film.samples.empty());
     expect_teardown_exactly_once(o);
     expect_safe_end(o);
 }

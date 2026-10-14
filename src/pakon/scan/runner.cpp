@@ -273,15 +273,18 @@ VoidResult ScanRunner::run_phases(ScanDevice& device, stream::IImageStream& stre
     }
     const Geometry fg = film_geometry(mode, base.offset);
     result_.film_geometry = fg;
-    // The whole window is held in memory: reserve it now, before the
-    // motor moves, so a row cap the host cannot hold fails here (caught
-    // by run(), teardown follows) instead of mid-strip.
-    if (config_.film_row_budget > result_.film.samples.max_size() / fg.samples_per_line()) {
-        return void_failure(ErrorKind::image_no_completion_policy,
-                            std::format("film row cap {} is too large to hold in memory",
-                                        config_.film_row_budget));
+    // Without a sink the whole window is held in memory: reserve it now,
+    // before the motor moves, so a row cap the host cannot hold fails here
+    // (caught by run(), teardown follows) instead of mid-strip.
+    result_.film.geometry.samples_per_row = static_cast<std::uint32_t>(fg.samples_per_line());
+    if (!config_.film_sink) {
+        if (config_.film_row_budget > result_.film.samples.max_size() / fg.samples_per_line()) {
+            return void_failure(ErrorKind::image_no_completion_policy,
+                                std::format("film row cap {} is too large to hold in memory",
+                                            config_.film_row_budget));
+        }
+        result_.film.samples.reserve(config_.film_row_budget * fg.samples_per_line());
     }
-    result_.film.samples.reserve(config_.film_row_budget * fg.samples_per_line());
     if (auto r = device.fpga_settings(fg, integ); !r) {
         return r;
     }
@@ -325,10 +328,13 @@ VoidResult ScanRunner::run_phases(ScanDevice& device, stream::IImageStream& stre
 
     t = Clock::now();
     image::RawImage& img = result_.film;
-    img.geometry.samples_per_row = static_cast<std::uint32_t>(fg.samples_per_line());
     FilmDetector detector(fg.pixels());
     const auto window_start = Clock::now();
-    const auto bytes_at_start = stream.stats().bytes_in;
+    // The line period is measured from the first line on: the time until
+    // that line arrives is command and transfer latency, not line time
+    // (it inflated a 300-row window to 1.37 ms in the simulator).
+    std::optional<Clock::time_point> first_line_at;
+    std::uint64_t bytes_at_first = 0;
     auto last_poll = Clock::now();
     bool film_seen = false;
     while (true) {
@@ -336,7 +342,18 @@ VoidResult ScanRunner::run_phases(ScanDevice& device, stream::IImageStream& stre
         if (!line) {
             return line.error();
         }
-        img.samples.insert(img.samples.end(), line->begin(), line->end());
+        if (!first_line_at) {
+            first_line_at = Clock::now();
+            bytes_at_first = stream.stats().bytes_in;
+        }
+        if (config_.film_sink) {
+            if (auto w = config_.film_sink->append(*line); !w) {
+                return w;
+            }
+        } else {
+            img.samples.insert(img.samples.end(), line->begin(), line->end());
+        }
+        ++result_.film_rows;
         const auto state = detector.feed(*line);
         if (state == FilmDetector::State::in_film && !film_seen) {
             film_seen = true;
@@ -348,7 +365,7 @@ VoidResult ScanRunner::run_phases(ScanDevice& device, stream::IImageStream& stre
             result_.film_end = FilmEnd::film_passed;
             break;
         }
-        if (img.rows() >= config_.film_row_budget) {
+        if (result_.film_rows >= config_.film_row_budget) {
             result_.film_end = FilmEnd::row_budget;
             break;
         }
@@ -364,7 +381,7 @@ VoidResult ScanRunner::run_phases(ScanDevice& device, stream::IImageStream& stre
             }
             if (ev->pending) {
                 result_.events.push_back(std::format(
-                    "film window line {}: service light 0x{:02x}{}", img.rows(),
+                    "film window line {}: service light 0x{:02x}{}", result_.film_rows,
                     ev->light_status,
                     ev->dx_flags ? std::format(" DX flags 0x{:02x}", *ev->dx_flags) : ""));
             }
@@ -376,9 +393,9 @@ VoidResult ScanRunner::run_phases(ScanDevice& device, stream::IImageStream& stre
     // Line period from what the device delivered during the window, not
     // from how fast this thread consumed it (a slow consumer lags behind
     // a ring that is still filling at the device's rate).
-    const double window_s = seconds_since(window_start);
+    const double window_s = first_line_at ? seconds_since(*first_line_at) : 0.0;
     const double delivered_lines =
-        static_cast<double>(stream.stats().bytes_in - bytes_at_start) /
+        static_cast<double>(stream.stats().bytes_in - bytes_at_first) /
         static_cast<double>(2 * fg.samples_per_line());
     // The HOST ends the window: acquire off (stream stops), LEDs.
     if (auto r = device.panel_leds(kLedFilmEnd); !r) {

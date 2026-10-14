@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -43,6 +44,15 @@ namespace pakon::scan {
 
 enum class ScanKind { first_light, film };
 
+// Where film rows go when they are not held in memory (the CLI streams
+// them to the .pakraw file). A failing append ends the scan with the
+// teardown, like any other error.
+class IRowSink {
+public:
+    virtual ~IRowSink() = default;
+    virtual VoidResult append(std::span<const std::uint16_t> row) = 0;
+};
+
 struct RunnerConfig {
     ScanMode mode{};
     ScanKind kind{ScanKind::first_light};
@@ -50,6 +60,10 @@ struct RunnerConfig {
     eeprom::UnitCalibration unit{};          // from eeprom::read_sections + parse
     std::size_t first_light_lines{256};      // white lines kept by first-light
     std::size_t film_row_budget{0};          // film: hard cap, required (> 0)
+    // Film rows go here instead of ScanResult::film (memory then stays
+    // flat however long the film is). Null: kept in memory, reserved
+    // before the motor moves.
+    IRowSink* film_sink{nullptr};
     std::chrono::milliseconds poll_interval{200};       // OEM idle poll
     std::chrono::milliseconds warmup_timeout{300000};   // bLampTemperatureStable
     std::chrono::milliseconds no_film_timeout{45000};   // capture: ~45 s
@@ -81,7 +95,8 @@ struct ScanResult {
     CorrectionsResult corrections{};
     Duties film_duties{};   // on-time fractions used for the film window
     image::RawImage white;  // first-light: white lines at the final settings
-    image::RawImage film;   // film window lines, as streamed
+    image::RawImage film;   // film window lines, as streamed (empty with a film_sink)
+    std::size_t film_rows{0}; // film window lines, in memory or sent to the sink
     FilmEnd film_end{FilmEnd::none};
     std::optional<std::size_t> film_start_line;
     std::optional<std::size_t> film_end_line;

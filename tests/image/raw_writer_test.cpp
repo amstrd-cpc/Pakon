@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -181,6 +182,51 @@ PAKON_TEST(stream_raw_rejects_inconsistent_geometry) {
 
     std::error_code ec;
     std::filesystem::remove(path, ec);
+}
+
+// The streaming writer (film rows straight to disk) produces exactly the
+// bytes of write_stream_raw, also across its 4 MiB buffer flushes.
+PAKON_TEST(streamed_raw_is_byte_identical_to_the_in_memory_writer) {
+    RawImage image;
+    image.geometry.samples_per_row = 6000; // a Base-4 film row
+    const std::size_t rows = 400;           // 4.8 MB: crosses one flush
+    for (std::size_t r = 0; r < rows; ++r) {
+        for (std::size_t i = 0; i < 6000; ++i) {
+            image.samples.push_back(static_cast<std::uint16_t>((r * 7919 + i * 31) & 0xFFFF));
+        }
+    }
+    RawStreamMeta meta;
+    meta.has_ir_lane = true;
+    meta.ir_region = std::pair<std::uint32_t, std::uint32_t>{4500, 1500};
+    const auto a = temp_path("pakon_stream_raw_memory.pakraw");
+    const auto b = temp_path("pakon_stream_raw_streamed.pakraw");
+    EXPECT(write_stream_raw(a, image, meta).has_value());
+    {
+        auto w = StreamRawWriter::open(b, 6000, meta);
+        EXPECT(w.has_value());
+        if (!w) {
+            return;
+        }
+        for (std::size_t r = 0; r < rows; ++r) {
+            EXPECT((*w)->append(std::span<const std::uint16_t>(image.samples).subspan(r * 6000, 6000))
+                       .has_value());
+        }
+        EXPECT_EQ((*w)->rows(), rows);
+        EXPECT((*w)->finish().has_value());
+        EXPECT((*w)->finish().has_value()); // idempotent
+    }
+    EXPECT(read_file(a) == read_file(b));
+}
+
+PAKON_TEST(streamed_raw_refuses_a_row_of_the_wrong_width) {
+    auto w = StreamRawWriter::open(temp_path("pakon_stream_raw_width.pakraw"), 9, {});
+    EXPECT(w.has_value());
+    if (!w) {
+        return;
+    }
+    std::vector<std::uint16_t> row(8, 1);
+    EXPECT(!(*w)->append(row).has_value());
+    EXPECT_EQ((*w)->rows(), 0u);
 }
 
 int main() { return pakon::test::run_all(); }

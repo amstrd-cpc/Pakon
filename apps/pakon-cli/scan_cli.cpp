@@ -7,7 +7,9 @@
 
 #include <algorithm>
 #include <charconv>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -241,27 +243,71 @@ void print_preflight(const Options& o, std::FILE* out) {
     std::fprintf(out, "dry run only - nothing was sent; --live-scan executes this plan.\n");
 }
 
-// RGB preview, transposed so that width = travel (lines) and height =
-// CCD pixels, the way the OEM export orients it. Linear, unprocessed.
-VoidResult write_preview(const std::string& path, const image::RawImage& img, std::size_t pixels,
-                         bool ir) {
-    const std::size_t rows = img.rows();
-    if (rows == 0 || pixels == 0) {
+// RGB preview from the written .pakraw, transposed so that width =
+// travel (lines) and height = CCD pixels, the way the OEM export orients
+// it. Linear, unprocessed. Read row by row and decimated so that neither
+// side exceeds kPreviewMax: a full roll does not have to fit in memory.
+constexpr std::size_t kPreviewMax = 8000;
+
+VoidResult write_preview(const std::string& tiff_path, const std::string& raw_path,
+                         std::size_t pixels) {
+    std::ifstream in(raw_path, std::ios::binary);
+    std::array<std::uint8_t, image::kStreamRawHeaderBytes> h{};
+    if (!in.read(reinterpret_cast<char*>(h.data()), static_cast<std::streamsize>(h.size()))) {
+        return void_failure(ErrorKind::io_failure, std::format("cannot read {}", raw_path));
+    }
+    const auto u32 = [&](std::size_t o) {
+        return static_cast<std::size_t>(h[o]) | (static_cast<std::size_t>(h[o + 1]) << 8) |
+               (static_cast<std::size_t>(h[o + 2]) << 16) | (static_cast<std::size_t>(h[o + 3]) << 24);
+    };
+    const std::size_t spr = u32(0x0C);
+    const std::size_t rows = u32(0x10);
+    if (rows == 0 || pixels == 0 || spr < 3 * pixels) {
         return void_failure(ErrorKind::image_bad_geometry, "no lines to preview");
     }
-    const std::size_t spr = img.geometry.samples_per_row;
-    (void)ir;
-    std::vector<std::uint16_t> rgb(rows * pixels * 3);
+    const std::size_t step = std::max<std::size_t>(1, (std::max(rows, pixels) + kPreviewMax - 1) / kPreviewMax);
+    const std::size_t w = (rows + step - 1) / step;
+    const std::size_t hgt = (pixels + step - 1) / step;
+    std::vector<std::uint16_t> rgb(w * hgt * 3);
+    std::vector<std::uint8_t> row(spr * 2);
     for (std::size_t r = 0; r < rows; ++r) {
-        for (std::size_t p = 0; p < pixels; ++p) {
+        if (!in.read(reinterpret_cast<char*>(row.data()), static_cast<std::streamsize>(row.size()))) {
+            return void_failure(ErrorKind::io_failure, std::format("{} ends at row {}", raw_path, r));
+        }
+        if (r % step != 0) {
+            continue;
+        }
+        for (std::size_t p = 0; p < pixels; p += step) {
             for (std::size_t c = 0; c < 3; ++c) {
-                rgb[(p * rows + r) * 3 + c] = img.samples[r * spr + 3 * p + c];
+                const std::size_t s = 2 * (3 * p + c);
+                rgb[((p / step) * w + r / step) * 3 + c] =
+                    static_cast<std::uint16_t>(row[s] | (row[s + 1] << 8));
             }
         }
     }
-    return image::write_tiff16(path, static_cast<std::uint32_t>(rows),
-                               static_cast<std::uint32_t>(pixels), 3, rgb);
+    return image::write_tiff16(tiff_path, static_cast<std::uint32_t>(w),
+                               static_cast<std::uint32_t>(hgt), 3, rgb);
 }
+
+image::RawStreamMeta raw_meta(const scan::Geometry& g) {
+    image::RawStreamMeta meta;
+    meta.has_ir_lane = g.ir;
+    if (g.ir) {
+        meta.ir_region = std::pair<std::uint32_t, std::uint32_t>{
+            static_cast<std::uint32_t>(3 * g.pixels()), static_cast<std::uint32_t>(g.pixels())};
+    }
+    return meta;
+}
+
+// Film rows straight to the .pakraw file (scan::IRowSink).
+class FileRowSink final : public scan::IRowSink {
+public:
+    explicit FileRowSink(image::StreamRawWriter& writer) : writer_(writer) {}
+    VoidResult append(std::span<const std::uint16_t> row) override { return writer_.append(row); }
+
+private:
+    image::StreamRawWriter& writer_;
+};
 
 void print_unit(std::FILE* out, const eeprom::UnitCalibration& u, scan::ScanMode m) {
     const auto& b = u.base[scan::base_index(m.base)];
@@ -281,9 +327,11 @@ void print_unit(std::FILE* out, const eeprom::UnitCalibration& u, scan::ScanMode
 void print_stats(std::FILE* out, const scan::ScanResult& r, std::size_t pixels) {
     const auto& s = r.stream;
     const auto& img = r.kind == scan::ScanKind::first_light ? r.white : r.film;
+    const std::size_t rows = r.kind == scan::ScanKind::film ? r.film_rows : img.rows();
     std::fprintf(out, "scan-stats:\n");
-    std::fprintf(out, "  rows %zu, samples/row %u, pixels/row %zu, bytes %zu\n", img.rows(),
-                 img.geometry.samples_per_row, pixels, img.samples.size() * 2);
+    std::fprintf(out, "  rows %zu, samples/row %u, pixels/row %zu, bytes %zu\n", rows,
+                 img.geometry.samples_per_row, pixels,
+                 rows * img.geometry.samples_per_row * 2);
     if (r.kind == scan::ScanKind::film) {
         std::fprintf(out, "  line period %.3f ms, film end: %s", r.line_period_ms,
                      std::string(scan::to_string(r.film_end)).c_str());
@@ -343,6 +391,27 @@ int run_live(const Options& o, const ScanCliDeps& deps, std::FILE* out, std::FIL
         std::fprintf(err, "error: scan: no session opener wired\n");
         return 1;
     }
+    const auto outputs = outputs_for(o);
+    // Film rows stream to disk: the whole row cap must fit there. Checked
+    // before the device is even opened (the pixel width does not depend
+    // on the EEPROM Offset).
+    if (!o.first_light) {
+        const std::uint64_t need =
+            image::kStreamRawHeaderBytes +
+            std::uint64_t{o.film_rows} * scan::film_geometry(o.scan_mode, 0).samples_per_line() * 2;
+        std::error_code ec;
+        const auto dir = std::filesystem::absolute(outputs.raw, ec).parent_path();
+        const auto space = std::filesystem::space(dir, ec);
+        if (!ec && space.available < need) {
+            std::fprintf(err,
+                         "error: scan: %zu rows need %llu MB on %s, %llu MB free - lower "
+                         "--film-rows or free space\n",
+                         o.film_rows, static_cast<unsigned long long>(need >> 20),
+                         dir.string().c_str(),
+                         static_cast<unsigned long long>(space.available >> 20));
+            return 1;
+        }
+    }
     auto opened = deps.open_session(); // the single device entry point
     if (!opened) {
         std::fprintf(err, "error: scan: open session: %s: %s\n",
@@ -389,6 +458,23 @@ int run_live(const Options& o, const ScanCliDeps& deps, std::FILE* out, std::FIL
     cfg.first_light_lines = o.first_light_lines;
     cfg.film_row_budget = o.film_rows;
     cfg.cancel = &interrupt_token();
+    const auto offset = unit.base[scan::base_index(o.scan_mode.base)].offset;
+    const auto geom = o.first_light ? scan::calibration_geometry(o.scan_mode, offset, o.scan_mode.ir)
+                                    : scan::film_geometry(o.scan_mode, offset);
+    // Film rows go straight to the .pakraw file; opened before any motion.
+    std::unique_ptr<image::StreamRawWriter> film_file;
+    std::optional<FileRowSink> film_sink;
+    if (!o.first_light) {
+        auto w = image::StreamRawWriter::open(
+            outputs.raw, static_cast<std::uint32_t>(geom.samples_per_line()), raw_meta(geom));
+        if (!w) {
+            std::fprintf(err, "error: scan: %s\n", w.error().message.c_str());
+            return 1;
+        }
+        film_file = std::move(*w);
+        film_sink.emplace(*film_file);
+        cfg.film_sink = &*film_sink;
+    }
     auto runner = scan::ScanRunner::create(cfg);
     if (!runner) {
         std::fprintf(err, "error: scan: %s\n", runner.error().message.c_str());
@@ -403,12 +489,6 @@ int run_live(const Options& o, const ScanCliDeps& deps, std::FILE* out, std::FIL
     auto result = (*runner)->run(commands, stream);
     restore_interrupt_handlers();
 
-    const auto geom = o.first_light
-                          ? scan::calibration_geometry(o.scan_mode,
-                                                       unit.base[scan::base_index(o.scan_mode.base)].offset,
-                                                       o.scan_mode.ir)
-                          : scan::film_geometry(o.scan_mode,
-                                                unit.base[scan::base_index(o.scan_mode.base)].offset);
     const auto& r = result ? *result : (*runner)->partial();
     if (!result) {
         std::fprintf(err, "error: scan: %s: %s\n",
@@ -419,23 +499,30 @@ int run_live(const Options& o, const ScanCliDeps& deps, std::FILE* out, std::FIL
     print_teardown(result && r.teardown.all_ok() ? out : err, r.teardown);
 
     // Save whatever was captured, even after a failure (for analysis).
-    const auto outputs = outputs_for(o);
-    const auto& img = o.first_light ? r.white : r.film;
     int code = result && r.teardown.all_ok() ? 0 : 1;
-    if (img.rows() > 0) {
-        image::RawStreamMeta meta;
-        meta.has_ir_lane = geom.ir;
-        if (geom.ir) {
-            meta.ir_region = std::pair<std::uint32_t, std::uint32_t>{
-                static_cast<std::uint32_t>(3 * geom.pixels()), static_cast<std::uint32_t>(geom.pixels())};
+    std::size_t rows = 0;
+    bool raw_ok = true;
+    if (o.first_light) {
+        rows = r.white.rows();
+        if (rows > 0) {
+            if (auto w = image::write_stream_raw(outputs.raw, r.white, raw_meta(geom)); !w) {
+                std::fprintf(err, "error: write %s: %s\n", outputs.raw.c_str(),
+                             w.error().message.c_str());
+                raw_ok = false;
+            }
         }
-        if (auto w = image::write_stream_raw(outputs.raw, img, meta); !w) {
+    } else {
+        rows = static_cast<std::size_t>(film_file->rows());
+        if (auto w = film_file->finish(); !w) {
             std::fprintf(err, "error: write %s: %s\n", outputs.raw.c_str(), w.error().message.c_str());
-            code = 1;
-        } else {
-            std::fprintf(out, "written: %s\n", outputs.raw.c_str());
+            raw_ok = false;
         }
-        if (auto w = write_preview(outputs.tiff, img, geom.pixels(), geom.ir); !w) {
+    }
+    if (!raw_ok) {
+        code = 1;
+    } else if (rows > 0) {
+        std::fprintf(out, "written: %s\n", outputs.raw.c_str());
+        if (auto w = write_preview(outputs.tiff, outputs.raw, geom.pixels()); !w) {
             std::fprintf(err, "error: write %s: %s\n", outputs.tiff.c_str(), w.error().message.c_str());
             code = 1;
         } else {

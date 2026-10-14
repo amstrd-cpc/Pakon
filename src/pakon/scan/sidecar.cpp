@@ -63,7 +63,8 @@ std::string sidecar_json(const ScanResult& r) {
     s += std::format(
         "\"image\":{{\"rows\":{},\"samples_per_row\":{},\"film_start_line\":{},"
         "\"film_end_line\":{},\"film_end\":\"{}\",\"line_period_ms\":{:.4f}}},\n",
-        img.rows(), img.geometry.samples_per_row, optional_line(r.film_start_line),
+        r.kind == ScanKind::film ? r.film_rows : img.rows(), img.geometry.samples_per_row,
+        optional_line(r.film_start_line),
         optional_line(r.film_end_line), to_string(r.film_end), r.line_period_ms);
     s += std::format(
         "\"stream\":{{\"bytes_in\":{},\"overflow_events\":{},\"transfer_errors\":{},"
