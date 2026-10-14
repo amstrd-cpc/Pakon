@@ -150,6 +150,33 @@ PAKON_TEST(a_frame_without_a_visible_gap_still_lands_on_the_pitch) {
     }
 }
 
+PAKON_TEST(fogged_leader_and_blank_tail_are_not_pictures) {
+    auto p = strip(300, 6, 1600, 80);
+    // Frame 1 fogged (nearly opaque), frame 6 blank (bare base).
+    for (std::size_t i = 300 + 80; i < 300 + 1600; ++i) {
+        p[i] = LineStats{0.004f, 0.002f, 0.006f};
+    }
+    for (std::size_t i = 300 + 5 * 1600 + 80; i < 300 + 6 * 1600; ++i) {
+        p[i] = LineStats{0.15f, 0.145f, 0.156f};
+    }
+    const auto split = find_frames(p, info_for_pitch(1600, 300, std::nullopt));
+    std::size_t pictures = 0;
+    for (const auto& f : split.frames) {
+        pictures += f.kind == FrameKind::picture;
+    }
+    EXPECT_EQ(pictures, 4u);
+    if (!split.frames.empty()) {
+        EXPECT(split.frames.front().kind == FrameKind::fogged);
+    }
+    // The blank frame merges with its gaps into one run; whatever piece
+    // of it is kept must not be a picture.
+    for (const auto& f : split.frames) {
+        if (f.first >= 300 + 5 * 1600) {
+            EXPECT(f.kind != FrameKind::picture);
+        }
+    }
+}
+
 PAKON_TEST(frames_stop_at_the_film_end_and_skip_short_pieces) {
     const auto p = strip(300, 6, 1600, 80);
     // Film ends half way into frame 6: that piece is too short to keep.

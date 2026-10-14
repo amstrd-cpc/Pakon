@@ -29,6 +29,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "pakon/errors/error.hpp"
@@ -65,11 +66,19 @@ struct GapRun {
     std::size_t first{0}; // [first, last) lines of bare base
     std::size_t last{0};
 };
+// What a frame-sized piece of film holds. Blank: >= 80 % of its lines are
+// bare base (unexposed tail; roll1 frame 38: 100 %, pictures <= 6 %).
+// Fogged: median line p90 < 0.08 x base, nearly opaque (the fogged
+// leader; roll1 frame 1: 0.03, pictures >= 0.19). roll1/film2, 2026-10-14.
+enum class FrameKind { picture, blank, fogged };
+std::string_view to_string(FrameKind k);
+
 struct Frame {
     std::size_t first{0}; // [first, last) lines of the picture
     std::size_t last{0};
     bool leading_gap_seen{false};
     bool trailing_gap_seen{false};
+    FrameKind kind{FrameKind::picture};
 };
 struct FrameSplit {
     double pitch_seed{0};

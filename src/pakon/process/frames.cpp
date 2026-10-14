@@ -219,10 +219,36 @@ FrameSplit find_frames(std::span<const LineStats> profile, const ScanInfo& info)
         hi = std::min(hi, static_cast<double>(end));
         if (hi - lo >= 0.8 * pitch) {
             fs.frames.push_back({static_cast<std::size_t>(lo), static_cast<std::size_t>(hi),
-                                 a.run.has_value(), b.run.has_value()});
+                                 a.run.has_value(), b.run.has_value(), FrameKind::picture});
+        }
+    }
+    for (auto& f : fs.frames) {
+        std::size_t base_like = 0;
+        std::vector<float> p90;
+        p90.reserve(f.last - f.first);
+        for (std::size_t i = f.first; i < f.last; ++i) {
+            const auto& l = profile[i];
+            base_like += l.p10 >= 0.85 * fs.base && l.p90 <= 1.15 * fs.base;
+            p90.push_back(l.p90);
+        }
+        std::nth_element(p90.begin(), p90.begin() + static_cast<std::ptrdiff_t>(p90.size() / 2),
+                         p90.end());
+        if (static_cast<double>(base_like) >= 0.8 * static_cast<double>(f.last - f.first)) {
+            f.kind = FrameKind::blank;
+        } else if (p90[p90.size() / 2] < 0.08 * fs.base) {
+            f.kind = FrameKind::fogged;
         }
     }
     return fs;
+}
+
+std::string_view to_string(FrameKind k) {
+    switch (k) {
+    case FrameKind::picture: return "picture";
+    case FrameKind::blank: return "blank";
+    case FrameKind::fogged: return "fogged";
+    }
+    return "?";
 }
 
 } // namespace pakon::process

@@ -27,10 +27,10 @@ std::string frames_json(const process::FrameSplit& s, const std::string& raw) {
     j += "],\n\"frames\":[\n";
     for (std::size_t i = 0; i < s.frames.size(); ++i) {
         const auto& f = s.frames[i];
-        j += std::format("{}  {{\"index\":{},\"first_line\":{},\"end_line\":{},"
+        j += std::format("{}  {{\"index\":{},\"kind\":\"{}\",\"first_line\":{},\"end_line\":{},"
                          "\"leading_gap_seen\":{},\"trailing_gap_seen\":{}}}",
-                         i ? ",\n" : "", i + 1, f.first, f.last, f.leading_gap_seen,
-                         f.trailing_gap_seen);
+                         i ? ",\n" : "", i + 1, process::to_string(f.kind), f.first, f.last,
+                         f.leading_gap_seen, f.trailing_gap_seen);
     }
     return j + "\n]}\n";
 }
@@ -141,10 +141,13 @@ int run_frames_command(const std::vector<std::string>& args, std::FILE* out, std
                  info->film_end ? std::to_string(*info->film_end).c_str() : "end",
                  split.pitch_seed, split.pitch, split.base, split.gaps.size(),
                  split.gaps_on_grid);
-    for (std::size_t i = 0; i < split.frames.size(); ++i) {
-        const auto& f = split.frames[i];
-        std::fprintf(out, "  frame %2zu: lines %zu..%zu (%zu)%s\n", i + 1, f.first, f.last,
-                     f.last - f.first,
+    std::size_t picture = 0;
+    for (const auto& f : split.frames) {
+        const bool pic = f.kind == process::FrameKind::picture;
+        std::fprintf(out, "  %s lines %zu..%zu (%zu)%s\n",
+                     pic ? std::format("frame {:2}:", ++picture).c_str()
+                         : std::format("{:<9}", std::string(process::to_string(f.kind)) + ":").c_str(),
+                     f.first, f.last, f.last - f.first,
                      f.leading_gap_seen && f.trailing_gap_seen ? "" : "  [edge predicted]");
     }
 
@@ -168,9 +171,14 @@ int run_frames_command(const std::vector<std::string>& args, std::FILE* out, std
     if (detect_only) {
         return code;
     }
+    std::size_t n = 0;
     for (std::size_t i = 0; i < split.frames.size(); ++i) {
-        const auto rgb = std::format("{}.frame{:02}.tiff", stem, i + 1);
-        const auto ir = std::format("{}.frame{:02}.ir.tiff", stem, i + 1);
+        if (split.frames[i].kind != process::FrameKind::picture) {
+            continue; // blank or fogged film: listed in frames.json only
+        }
+        ++n;
+        const auto rgb = std::format("{}.frame{:02}.tiff", stem, n);
+        const auto ir = std::format("{}.frame{:02}.ir.tiff", stem, n);
         if (auto w = write_frame(**raw, *info, split.frames[i], rgb, ir); !w) {
             std::fprintf(err, "error: frames: %s: %s\n", rgb.c_str(), w.error().message.c_str());
             code = 1;
