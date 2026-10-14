@@ -300,7 +300,12 @@ PAKON_TEST(every_configuration_scans_a_strip_end_to_end) {
     const sim::EepromSpec spec; // this unit's Offsets 28/56/59
     for (const auto mode : modes) {
         auto scfg = fast_sim();
-        scfg.film = sim::FilmModel{200, 600};
+        // 1200 lines of open gate first: the detector's reference must see
+        // an empty gate even if the host stalls between motor go and
+        // acquire on (the film travels meanwhile; at 4x speed 200 lines
+        // were ~45 ms and a busy host lost them, 2026-10-14). On the unit
+        // the film arrives seconds into the window (roll1: line 10648).
+        scfg.film = sim::FilmModel{1200, 600};
         auto o = run(scfg, fast_runner(mode, scan::ScanKind::film));
         dump_session(o.frames, mode);
         EXPECT(o.ok);
