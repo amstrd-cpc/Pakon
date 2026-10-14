@@ -159,6 +159,71 @@ void dump(DWORD seq, int arg, DWORD phase, const void* p) {
     logf("\r\n");
 }
 
+// Full image buffers of the first kFullFrames full-size frames (width >=
+// 1000), one file each: PakonIMAu_<seq>_<name>_<tag>.raw, described in
+// the log. Layouts and sizes from the third VM run (2026-10-14):
+//   PIRotatePlanar(_, buf=a1, w=a2, h=a3, planes=a4, ...)    16-bit planar
+//   PIAnselColorSceneBalancePlanar(roll, scene, a2 -> {in, out, w, h})
+//   PIScaleAndRotatePlanar(buf=a0, _, w, h, out_w=a4, out_h=a5, planes=a6)
+//   PIColorAdjustPlanar(..., in=a9 16-bit, out=a10 8-bit, w=a11, h=a12)
+constexpr int kFullFrames = 2;
+int g_full_seen = 0; // PIRotatePlanar calls at full size so far
+
+void dump_full(DWORD seq, const char* name, const char* tag, DWORD addr, DWORD bytes,
+               DWORD w, DWORD h, const char* format) {
+    if (addr < 0x10000 || bytes == 0 || bytes > 0x08000000u ||
+        IsBadReadPtr(reinterpret_cast<const void*>(addr), bytes)) {
+        logf("    full %s: %08lx [%lu] not readable\r\n", tag, addr, bytes);
+        return;
+    }
+    char file[MAX_PATH];
+    char leaf[96];
+    wsprintfA(leaf, "PakonIMAu_%03lu_%s_%s.raw", seq, name, tag);
+    lstrcpyA(file, g_dir);
+    lstrcatA(file, leaf);
+    HANDLE h_file = CreateFileA(file, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                FILE_ATTRIBUTE_NORMAL, nullptr);
+    write(h_file, reinterpret_cast<const void*>(addr), bytes);
+    if (h_file != INVALID_HANDLE_VALUE) {
+        CloseHandle(h_file);
+    }
+    logf("    full %s -> %s: %lux%lu %s, %lu bytes @%08lx\r\n", tag, leaf, w, h, format, bytes,
+         addr);
+}
+
+// Phase 0 = before the call, 1 = after. Caller holds the lock.
+void dump_images(DWORD seq, const char* name, const DWORD* a, DWORD phase) {
+    if (lstrcmpA(name, "PIRotatePlanar") == 0) {
+        if (phase == 0 && a[2] >= 1000) {
+            ++g_full_seen;
+        }
+        if (a[2] >= 1000 && g_full_seen <= kFullFrames) {
+            dump_full(seq, name, phase ? "after" : "before", a[1], a[2] * a[3] * a[4] * 2, a[2],
+                      a[3], "u16 planar");
+        }
+        return;
+    }
+    if (g_full_seen == 0 || g_full_seen > kFullFrames) {
+        return;
+    }
+    if (lstrcmpA(name, "PIAnselColorSceneBalancePlanar") == 0 && phase == 1 &&
+        !IsBadReadPtr(reinterpret_cast<const void*>(a[2]), 16)) {
+        const DWORD* s = reinterpret_cast<const DWORD*>(a[2]);
+        if (s[2] >= 1000) {
+            dump_full(seq, name, "in", s[0], s[2] * s[3] * 3 * 2, s[2], s[3], "u16 planar");
+            dump_full(seq, name, "out", s[1], s[2] * s[3] * 3 * 2, s[2], s[3], "u16 planar");
+        }
+    } else if (lstrcmpA(name, "PIScaleAndRotatePlanar") == 0 && phase == 1 && a[4] >= 1000) {
+        dump_full(seq, name, "out", a[0], a[4] * a[5] * a[6] * 2, a[4], a[5], "u16 planar");
+    } else if (lstrcmpA(name, "PIColorAdjustPlanar") == 0 && a[11] >= 1000) {
+        if (phase == 0) {
+            dump_full(seq, name, "in", a[9], a[11] * a[12] * 3 * 2, a[11], a[12], "u16 planar");
+        } else {
+            dump_full(seq, name, "out", a[10], a[11] * a[12] * 3, a[11], a[12], "u8 (layout?)");
+        }
+    }
+}
+
 using Fn = DWORD(__cdecl*)(DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD,
                            DWORD, DWORD, DWORD, DWORD, DWORD, DWORD);
 
@@ -175,6 +240,7 @@ DWORD forward(const char* name, const DWORD* a) {
     for (int i = 0; i < kArgs; ++i) {
         dump(seq, i, 0, reinterpret_cast<const void*>(a[i]));
     }
+    dump_images(seq, name, a, 0);
     LeaveCriticalSection(&g_lock);
     if (!fn) {
         return 0xFFFFFFFFu;
@@ -188,6 +254,7 @@ DWORD forward(const char* name, const DWORD* a) {
     for (int i = 0; i < kArgs; ++i) {
         dump(seq, i, 1, reinterpret_cast<const void*>(a[i]));
     }
+    dump_images(seq, name, a, 1);
     FlushFileBuffers(g_log);
     LeaveCriticalSection(&g_lock);
     return r;
